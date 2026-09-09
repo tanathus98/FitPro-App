@@ -1,0 +1,203 @@
+import {
+  collection,
+  collectionGroup,
+  doc,
+  setDoc,
+  updateDoc,
+  deleteDoc,
+  getDocs,
+  onSnapshot,
+  query,
+  where,
+  Unsubscribe,
+} from 'firebase/firestore';
+import { db } from '../lib/firebase';
+import {
+  Instructor,
+  Student,
+  WorkoutPlan,
+  ExecutionSubmission,
+  InstructorFeedback,
+  CardioLog,
+} from '../types';
+
+/* ------------------------------------------------------------------ */
+/* Instrutores — diretório público (leitura liberada, escrita própria) */
+/* ------------------------------------------------------------------ */
+
+export function subscribeInstructors(cb: (list: Instructor[]) => void): Unsubscribe {
+  return onSnapshot(collection(db, 'instructors'), (snap) => {
+    cb(snap.docs.map((d) => ({ ...(d.data() as Instructor), id: d.id })));
+  });
+}
+
+export async function saveInstructor(instructor: Instructor) {
+  await setDoc(doc(db, 'instructors', instructor.id), instructor, { merge: true });
+}
+
+/* ------------------------------------------------------------------ */
+/* Alunos                                                              */
+/* ------------------------------------------------------------------ */
+
+export function subscribeStudentsByInstructor(
+  instructorId: string,
+  cb: (list: Student[]) => void
+): Unsubscribe {
+  const q = query(collection(db, 'students'), where('instructorId', '==', instructorId));
+  return onSnapshot(q, (snap) => {
+    cb(snap.docs.map((d) => ({ ...(d.data() as Student), id: d.id })));
+  });
+}
+
+export function subscribeStudentById(
+  studentId: string,
+  cb: (student: Student | null) => void
+): Unsubscribe {
+  return onSnapshot(doc(db, 'students', studentId), (snap) => {
+    cb(snap.exists() ? { ...(snap.data() as Student), id: snap.id } : null);
+  });
+}
+
+export async function saveStudent(student: Student) {
+  await setDoc(doc(db, 'students', student.id), student, { merge: true });
+}
+
+export async function deleteStudent(studentId: string) {
+  // Apaga também os dados das subcoleções do aluno (fichas, submissões e
+  // cardio) antes de remover o perfil, para não deixar dados órfãos.
+  const subcollections = ['plans', 'submissions', 'cardioLogs'];
+  for (const sub of subcollections) {
+    const snap = await getDocs(collection(db, 'students', studentId, sub));
+    await Promise.all(snap.docs.map((d) => deleteDoc(d.ref)));
+  }
+  await deleteDoc(doc(db, 'students', studentId));
+}
+
+/* ------------------------------------------------------------------ */
+/* Planos de treino — subcoleção de cada aluno                        */
+/* ------------------------------------------------------------------ */
+
+export function subscribePlansForStudent(
+  studentId: string,
+  cb: (plans: Record<string, WorkoutPlan>) => void
+): Unsubscribe {
+  return onSnapshot(collection(db, 'students', studentId, 'plans'), (snap) => {
+    const plans: Record<string, WorkoutPlan> = {};
+    snap.docs.forEach((d) => {
+      plans[d.id] = { ...(d.data() as WorkoutPlan), id: d.id };
+    });
+    cb(plans);
+  });
+}
+
+/** Assina os planos de vários alunos ao mesmo tempo e mescla tudo num único mapa. */
+export function subscribePlansForStudents(
+  studentIds: string[],
+  cb: (plans: Record<string, WorkoutPlan>) => void
+): Unsubscribe {
+  const perStudent: Record<string, Record<string, WorkoutPlan>> = {};
+
+  const emitMerged = () => {
+    const all: Record<string, WorkoutPlan> = {};
+    Object.values(perStudent).forEach((m) => Object.assign(all, m));
+    cb(all);
+  };
+
+  const unsubs = studentIds.map((sid) =>
+    onSnapshot(collection(db, 'students', sid, 'plans'), (snap) => {
+      const plans: Record<string, WorkoutPlan> = {};
+      snap.docs.forEach((d) => {
+        plans[d.id] = { ...(d.data() as WorkoutPlan), id: d.id };
+      });
+      perStudent[sid] = plans;
+      emitMerged();
+    })
+  );
+
+  return () => unsubs.forEach((u) => u());
+}
+
+export async function savePlan(studentId: string, plan: WorkoutPlan) {
+  await setDoc(doc(db, 'students', studentId, 'plans', plan.id), plan, { merge: true });
+}
+
+/* ------------------------------------------------------------------ */
+/* Submissões de execução — subcoleção de cada aluno                  */
+/* (guardamos instructorId também no documento para permitir consulta */
+/*  "todas as submissões dos meus alunos" via collectionGroup)        */
+/* ------------------------------------------------------------------ */
+
+export function subscribeSubmissionsForStudent(
+  studentId: string,
+  cb: (list: ExecutionSubmission[]) => void
+): Unsubscribe {
+  return onSnapshot(collection(db, 'students', studentId, 'submissions'), (snap) => {
+    cb(snap.docs.map((d) => ({ ...(d.data() as ExecutionSubmission), id: d.id })));
+  });
+}
+
+export function subscribeSubmissionsForInstructor(
+  instructorId: string,
+  cb: (list: ExecutionSubmission[]) => void
+): Unsubscribe {
+  const q = query(collectionGroup(db, 'submissions'), where('instructorId', '==', instructorId));
+  return onSnapshot(q, (snap) => {
+    cb(snap.docs.map((d) => ({ ...(d.data() as ExecutionSubmission), id: d.id })));
+  });
+}
+
+export async function addSubmission(
+  studentId: string,
+  instructorId: string,
+  submission: ExecutionSubmission
+) {
+  await setDoc(doc(db, 'students', studentId, 'submissions', submission.id), {
+    ...submission,
+    instructorId,
+  });
+}
+
+export async function updateSubmissionFeedback(
+  studentId: string,
+  submissionId: string,
+  feedback: InstructorFeedback
+) {
+  await updateDoc(doc(db, 'students', studentId, 'submissions', submissionId), {
+    status: 'reviewed',
+    feedback,
+  });
+}
+
+/* ------------------------------------------------------------------ */
+/* Registros de cardio — subcoleção de cada aluno                     */
+/* ------------------------------------------------------------------ */
+
+export function subscribeCardioLogsForStudent(
+  studentId: string,
+  cb: (list: CardioLog[]) => void
+): Unsubscribe {
+  return onSnapshot(collection(db, 'students', studentId, 'cardioLogs'), (snap) => {
+    cb(snap.docs.map((d) => ({ ...(d.data() as CardioLog), id: d.id })));
+  });
+}
+
+export function subscribeCardioLogsForInstructor(
+  instructorId: string,
+  cb: (list: CardioLog[]) => void
+): Unsubscribe {
+  const q = query(collectionGroup(db, 'cardioLogs'), where('instructorId', '==', instructorId));
+  return onSnapshot(q, (snap) => {
+    cb(snap.docs.map((d) => ({ ...(d.data() as CardioLog), id: d.id })));
+  });
+}
+
+export async function addCardioLog(studentId: string, instructorId: string, log: CardioLog) {
+  await setDoc(doc(db, 'students', studentId, 'cardioLogs', log.id), {
+    ...log,
+    instructorId,
+  });
+}
+
+export async function deleteCardioLog(studentId: string, logId: string) {
+  await deleteDoc(doc(db, 'students', studentId, 'cardioLogs', logId));
+}

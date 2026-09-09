@@ -1,0 +1,6 @@
+{
+  "name": "FitPro - Treinos de Academia",
+  "description": "Aplicativo moderno para gestão de treinos com perfis de Aluno e Instrutor, divisão por dias da semana, vídeos demonstrativos, envio de vídeos de execução para avaliação e painel de controle financeiro com alunos em dia e atrasados.",
+  "requestFramePermissions": ["camera", "microphone"],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
