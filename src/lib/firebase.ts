@@ -1,6 +1,7 @@
 import { initializeApp, getApps, getApp, FirebaseApp } from 'firebase/app';
 import { getAuth } from 'firebase/auth';
 import { getFirestore } from 'firebase/firestore';
+import { getStorage } from 'firebase/storage';
 
 // Todas as chaves vêm de variáveis de ambiente (.env.local), nunca hardcoded.
 // No Vite, variáveis expostas ao navegador precisam começar com VITE_.
@@ -24,6 +25,7 @@ if (!firebaseConfig.apiKey || !firebaseConfig.projectId) {
 export const app: FirebaseApp = getApps().length ? getApp() : initializeApp(firebaseConfig);
 export const auth = getAuth(app);
 export const db = getFirestore(app);
+export const storage = getStorage(app);
 
 /**
  * Retorna uma instância SECUNDÁRIA do Firebase App, com sua própria sessão de Auth

@@ -1,0 +1,68 @@
+rules_version = '2';
+
+// Regras de segurança do Firebase Storage do FitPro.
+// Cole este conteúdo em: Console do Firebase > Storage > Regras.
+//
+// Estrutura de arquivos:
+//   submissions/{studentId}/{arquivo}      -> vídeos de execução enviados pelo aluno
+//   exercise-videos/{instructorId}/{arq.}  -> vídeos demonstrativos cadastrados pelo professor
+//
+// Para "submissions", espelha a lógica de firestore.rules: o próprio aluno pode
+// enviar vídeos na sua pasta, e o instrutor responsável por aquele aluno pode
+// ler (para avaliar). A checagem de "quem é o instrutor do aluno" usa
+// firestore.get() para consultar o documento students/{studentId} e comparar
+// o campo instructorId.
+
+service firebase.storage {
+  match /b/{bucket}/o {
+
+    match /submissions/{studentId}/{fileName} {
+      function isSignedIn() {
+        return request.auth != null;
+      }
+
+      function isStudentOwner() {
+        return isSignedIn() && request.auth.uid == studentId;
+      }
+
+      function isOwningInstructor() {
+        return isSignedIn() &&
+          firestore.get(/databases/(default)/documents/students/$(studentId)).data.instructorId
+            == request.auth.uid;
+      }
+
+      allow read: if isStudentOwner() || isOwningInstructor();
+
+      // Só o próprio aluno grava seus vídeos, com limite de 100MB e apenas
+      // arquivos de vídeo (evita uso indevido do bucket para outros fins).
+      allow create, update: if isStudentOwner()
+        && request.resource.size < 100 * 1024 * 1024
+        && request.resource.contentType.matches('video/.*');
+
+      allow delete: if isStudentOwner() || isOwningInstructor();
+    }
+
+    // Vídeos demonstrativos de exercícios, cadastrados pelo professor.
+    // Sem dado pessoal sensível (é só a demonstração do movimento), então a
+    // leitura é liberada para qualquer usuário autenticado — inclusive
+    // qualquer aluno do professor precisa poder assistir. Só o próprio
+    // professor pode enviar/editar/remover os vídeos da própria pasta.
+    match /exercise-videos/{instructorId}/{fileName} {
+      function isSignedIn() {
+        return request.auth != null;
+      }
+
+      function isOwningInstructor() {
+        return isSignedIn() && request.auth.uid == instructorId;
+      }
+
+      allow read: if isSignedIn();
+
+      allow create, update: if isOwningInstructor()
+        && request.resource.size < 100 * 1024 * 1024
+        && request.resource.contentType.matches('video/.*');
+
+      allow delete: if isOwningInstructor();
+    }
+  }
+}

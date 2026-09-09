@@ -15,6 +15,7 @@ import { ExerciseVideoModal } from './ExerciseVideoModal';
 import { SubmissionDetailModal } from './SubmissionDetailModal';
 import { BMICalculatorModal, getBMICategory } from './BMICalculatorModal';
 import { CardioTrackerModal } from './CardioTrackerModal';
+import { uploadExerciseVideo } from '../services/dataService';
 
 interface InstructorViewProps {
   instructor: Instructor;
@@ -1144,18 +1145,18 @@ export const InstructorView: React.FC<InstructorViewProps> = ({
                             </div>
 
                             {/* Exercise Info */}
-                            <div className="min-w-0">
-                              <div className="flex items-center gap-2">
-                                <span className="text-xs font-bold text-slate-900 truncate">{exercise.name}</span>
-                                <span className="text-[10px] px-2 py-0.2 rounded-md bg-indigo-50 text-indigo-600 border border-indigo-100">
+                            <div className="min-w-0 flex-1">
+                              <div className="flex items-center gap-2 min-w-0">
+                                <span className="text-xs font-bold text-slate-900 truncate min-w-0">{exercise.name}</span>
+                                <span className="text-[10px] px-2 py-0.2 rounded-md bg-indigo-50 text-indigo-600 border border-indigo-100 shrink-0">
                                   {exercise.muscleGroup}
                                 </span>
                               </div>
-                              <p className="text-[11px] text-slate-500 mt-1">
+                              <p className="text-[11px] text-slate-500 mt-1 break-words">
                                 <strong className="text-slate-800">{exercise.sets} séries × {exercise.reps}</strong> • Carga: <span className="text-indigo-600 font-semibold">{exercise.suggestedWeight || 'Livre'}</span> • Descanso: {exercise.restSeconds}s
                               </p>
                               {exercise.tips && (
-                                <p className="text-[10px] text-amber-700/90 truncate max-w-sm mt-0.5">
+                                <p className="text-[10px] text-amber-700/90 break-words mt-0.5">
                                   Dica: {exercise.tips}
                                 </p>
                               )}
@@ -1379,18 +1380,18 @@ export const InstructorView: React.FC<InstructorViewProps> = ({
 
                       <div className="flex flex-wrap items-center gap-3 text-xs text-slate-600">
                         <span>Carga usada: <strong className="text-slate-900">{sub.weightUsed || 'Não inf.'}</strong></span>
-                        {sub.repsCompleted && (
+                        {sub.repsDone && (
                           <>
                             <span>•</span>
-                            <span>Repetições: <strong className="text-slate-900">{sub.repsCompleted}</strong></span>
+                            <span>Repetições: <strong className="text-slate-900">{sub.repsDone}</strong></span>
                           </>
                         )}
                       </div>
 
                       {sub.studentNotes && (
-                        <div className="pt-2 border-t border-slate-200/60 flex items-start gap-1.5 text-xs text-slate-600">
+                        <div className="pt-2 border-t border-slate-200/60 flex items-start gap-1.5 text-xs text-slate-600 min-w-0">
                           <MessageSquare className="w-3.5 h-3.5 text-slate-400 shrink-0 mt-0.5" />
-                          <span className="italic">"{sub.studentNotes}"</span>
+                          <span className="italic min-w-0 break-words">"{sub.studentNotes}"</span>
                         </div>
                       )}
                     </div>
@@ -1398,14 +1399,18 @@ export const InstructorView: React.FC<InstructorViewProps> = ({
                     {/* Feedback Summary (if already reviewed) */}
                     {sub.feedback && (
                       <div className="p-3 bg-indigo-50/50 rounded-2xl border border-indigo-100 text-xs space-y-1">
-                        <div className="flex items-center justify-between">
-                          <span className="font-bold text-indigo-900 text-[11px]">Seu Diagnóstico:</span>
-                          <span className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-indigo-100 text-indigo-700">
-                            {sub.feedback.verdict}
+                        <div className="flex items-center justify-between gap-2">
+                          <span className="font-bold text-indigo-900 text-[11px] shrink-0">Seu Diagnóstico:</span>
+                          <span className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-indigo-100 text-indigo-700 text-right">
+                            {sub.feedback.statusVerdict === 'excelente'
+                              ? 'Excelente'
+                              : sub.feedback.statusVerdict === 'bom_ajustar'
+                              ? 'Bom, com ajustes'
+                              : 'Atenção'}
                           </span>
                         </div>
-                        <p className="text-slate-700 italic text-[11px] line-clamp-2">
-                          "{sub.feedback.feedbackText}"
+                        <p className="text-slate-700 italic text-[11px] line-clamp-2 break-words">
+                          "{sub.feedback.text}"
                         </p>
                       </div>
                     )}
@@ -1444,6 +1449,7 @@ export const InstructorView: React.FC<InstructorViewProps> = ({
       {showAddExerciseModal && (
         <ExerciseEditorModal
           initialExercise={editingExercise}
+          instructorId={instructor.id}
           onClose={() => {
             setShowAddExerciseModal(false);
             setEditingExercise(null);
@@ -1547,12 +1553,14 @@ export const InstructorView: React.FC<InstructorViewProps> = ({
 -------------------------------------------------------------- */
 interface ExerciseEditorModalProps {
   initialExercise: Exercise | null;
+  instructorId: string;
   onClose: () => void;
   onSave: (exercise: Exercise) => void;
 }
 
 const ExerciseEditorModal: React.FC<ExerciseEditorModalProps> = ({
   initialExercise,
+  instructorId,
   onClose,
   onSave,
 }) => {
@@ -1571,6 +1579,11 @@ const ExerciseEditorModal: React.FC<ExerciseEditorModalProps> = ({
   const [thumbnail, setThumbnail] = useState(initialExercise?.thumbnail || '');
   const [instructions, setInstructions] = useState(initialExercise?.instructions || '');
   const [tips, setTips] = useState(initialExercise?.tips || '');
+  const [isUploadingVideo, setIsUploadingVideo] = useState(false);
+  const [videoUploadError, setVideoUploadError] = useState<string | null>(null);
+  // Guarda o arquivo local escolhido até que o upload para o Storage termine
+  // e `videoUrl` seja substituído pela URL pública e permanente.
+  const pendingVideoFileRef = React.useRef<File | null>(null);
 
   // Filter Library
   const filteredLibrary = EXERCISE_LIBRARY.filter((item) => {
@@ -1580,6 +1593,8 @@ const ExerciseEditorModal: React.FC<ExerciseEditorModalProps> = ({
   });
 
   const handleSelectFromLibrary = (item: ExerciseLibraryItem) => {
+    pendingVideoFileRef.current = null;
+    setVideoUploadError(null);
     setName(item.name);
     setMuscleGroup(item.muscleGroup);
     setSets(item.defaultSets);
@@ -1595,24 +1610,53 @@ const ExerciseEditorModal: React.FC<ExerciseEditorModalProps> = ({
   const handleFileUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (file) {
+      // O blob: aqui serve apenas para o preview imediato dentro deste
+      // formulário. O arquivo real é enviado ao Storage no submit, e a
+      // URL final (pública e permanente) substitui esta antes de salvar.
+      pendingVideoFileRef.current = file;
+      setVideoUploadError(null);
       const blobUrl = URL.createObjectURL(file);
       setVideoUrl(blobUrl);
     }
   };
 
-  const handleSubmit = (e: React.FormEvent) => {
+  const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!name.trim()) return;
 
+    const exerciseId = initialExercise?.id || `ex_${Math.random().toString(36).substring(2, 9)}`;
+    let finalVideoUrl = videoUrl.trim();
+
+    try {
+      if (pendingVideoFileRef.current) {
+        setIsUploadingVideo(true);
+        setVideoUploadError(null);
+        finalVideoUrl = await uploadExerciseVideo(
+          instructorId,
+          exerciseId,
+          pendingVideoFileRef.current,
+          () => {} // progresso não exibido aqui para manter o formulário simples
+        );
+      }
+    } catch (err) {
+      console.error('Erro ao enviar vídeo do exercício:', err);
+      setIsUploadingVideo(false);
+      setVideoUploadError(
+        'Não foi possível enviar o vídeo. Verifique sua conexão e tente novamente.'
+      );
+      return;
+    }
+    setIsUploadingVideo(false);
+
     const newExercise: Exercise = {
-      id: initialExercise?.id || `ex_${Math.random().toString(36).substring(2, 9)}`,
+      id: exerciseId,
       name: name.trim(),
       muscleGroup,
       sets: Number(sets),
       reps: reps.trim(),
       suggestedWeight: suggestedWeight.trim(),
       restSeconds: Number(restSeconds),
-      videoUrl: videoUrl.trim(),
+      videoUrl: finalVideoUrl,
       thumbnail: thumbnail.trim(),
       instructions: instructions.trim(),
       tips: tips.trim(),
@@ -1845,7 +1889,11 @@ const ExerciseEditorModal: React.FC<ExerciseEditorModalProps> = ({
                     type="url"
                     id="custom-video-url"
                     value={videoUrl}
-                    onChange={(e) => setVideoUrl(e.target.value)}
+                    onChange={(e) => {
+                      pendingVideoFileRef.current = null;
+                      setVideoUploadError(null);
+                      setVideoUrl(e.target.value);
+                    }}
                     placeholder="https://exemplo.com/video.mp4 ou https://youtube.com/..."
                     className="w-full bg-white border border-slate-200 rounded-xl px-3 py-2 text-xs text-slate-900 focus:outline-none focus:border-indigo-500 font-mono text-[11px]"
                   />
@@ -1866,6 +1914,13 @@ const ExerciseEditorModal: React.FC<ExerciseEditorModalProps> = ({
                     Formatos aceitos: MP4, WebM, MOV
                   </span>
                 </div>
+
+                {/* Upload error */}
+                {videoUploadError && (
+                  <p className="text-[11px] text-rose-700 bg-rose-50 border border-rose-200 rounded-xl px-3 py-2">
+                    {videoUploadError}
+                  </p>
+                )}
 
                 {/* Mini video live preview */}
                 {videoUrl && (
@@ -1917,16 +1972,18 @@ const ExerciseEditorModal: React.FC<ExerciseEditorModalProps> = ({
                   type="button"
                   id="cancel-ex-btn"
                   onClick={onClose}
-                  className="px-4 py-2 rounded-xl bg-slate-100 hover:bg-slate-200 text-slate-700 text-xs font-semibold transition cursor-pointer"
+                  disabled={isUploadingVideo}
+                  className="px-4 py-2 rounded-xl bg-slate-100 hover:bg-slate-200 text-slate-700 text-xs font-semibold transition cursor-pointer disabled:opacity-50"
                 >
                   Cancelar
                 </button>
                 <button
                   type="submit"
                   id="save-ex-btn"
-                  className="px-5 py-2 rounded-xl bg-indigo-600 hover:bg-indigo-700 text-white text-xs font-semibold transition shadow-md shadow-indigo-200 cursor-pointer"
+                  disabled={isUploadingVideo}
+                  className="px-5 py-2 rounded-xl bg-indigo-600 hover:bg-indigo-700 text-white text-xs font-semibold transition shadow-md shadow-indigo-200 cursor-pointer disabled:opacity-50"
                 >
-                  Salvar na Ficha
+                  {isUploadingVideo ? 'Enviando vídeo...' : 'Salvar na Ficha'}
                 </button>
               </div>
             </form>

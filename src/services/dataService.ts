@@ -11,7 +11,8 @@ import {
   where,
   Unsubscribe,
 } from 'firebase/firestore';
-import { db } from '../lib/firebase';
+import { ref, uploadBytesResumable, getDownloadURL } from 'firebase/storage';
+import { db, storage } from '../lib/firebase';
 import {
   Instructor,
   Student,
@@ -144,6 +145,87 @@ export function subscribeSubmissionsForInstructor(
   return onSnapshot(q, (snap) => {
     cb(snap.docs.map((d) => ({ ...(d.data() as ExecutionSubmission), id: d.id })));
   });
+}
+
+function guessVideoExtension(file: Blob): string {
+  if (file.type.includes('mp4')) return 'mp4';
+  if (file.type.includes('quicktime')) return 'mov';
+  if (file.type.includes('webm')) return 'webm';
+  return 'mp4';
+}
+
+/**
+ * Faz upload de um arquivo/blob de vídeo para um caminho específico do
+ * Firebase Storage e retorna a URL pública de download.
+ *
+ * IMPORTANTE: antes desta função existir, o app salvava apenas uma URL
+ * local (blob:...) gerada por URL.createObjectURL(), que só existe na
+ * memória do navegador que gerou o vídeo. Isso fazia o vídeo "sumir" para
+ * quem abria o app em outro dispositivo/sessão, pois o arquivo nunca era
+ * de fato enviado a um servidor — só uma referência local era salva.
+ */
+function uploadVideoToStorage(
+  path: string,
+  file: Blob,
+  onProgress?: (percent: number) => void
+): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const storageRef = ref(storage, path);
+
+    const uploadTask = uploadBytesResumable(storageRef, file, {
+      contentType: file.type || 'video/mp4',
+    });
+
+    uploadTask.on(
+      'state_changed',
+      (snapshot) => {
+        const percent = (snapshot.bytesTransferred / snapshot.totalBytes) * 100;
+        onProgress?.(percent);
+      },
+      (error) => {
+        console.error('[Storage] Falha ao enviar vídeo:', error);
+        reject(error);
+      },
+      async () => {
+        try {
+          const downloadUrl = await getDownloadURL(uploadTask.snapshot.ref);
+          resolve(downloadUrl);
+        } catch (err) {
+          reject(err);
+        }
+      }
+    );
+  });
+}
+
+/** Vídeo de execução gravado/enviado pelo ALUNO, para avaliação do professor. */
+export function uploadExecutionVideo(
+  studentId: string,
+  submissionId: string,
+  file: Blob,
+  onProgress?: (percent: number) => void
+): Promise<string> {
+  const extension = guessVideoExtension(file);
+  return uploadVideoToStorage(
+    `submissions/${studentId}/${submissionId}.${extension}`,
+    file,
+    onProgress
+  );
+}
+
+/** Vídeo demonstrativo de um exercício, cadastrado pelo PROFESSOR. */
+export function uploadExerciseVideo(
+  instructorId: string,
+  exerciseFileId: string,
+  file: Blob,
+  onProgress?: (percent: number) => void
+): Promise<string> {
+  const extension = guessVideoExtension(file);
+  return uploadVideoToStorage(
+    `exercise-videos/${instructorId}/${exerciseFileId}.${extension}`,
+    file,
+    onProgress
+  );
 }
 
 export async function addSubmission(

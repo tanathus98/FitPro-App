@@ -15,6 +15,7 @@ import {
   Film
 } from 'lucide-react';
 import { DayOfWeek, Exercise, ExecutionSubmission, Student } from '../types';
+import { uploadExecutionVideo } from '../services/dataService';
 
 interface RecordExecutionModalProps {
   exercise: Exercise;
@@ -44,6 +45,8 @@ export const RecordExecutionModal: React.FC<RecordExecutionModalProps> = ({
   const [repsDone, setRepsDone] = useState(exercise.reps || '');
   const [studentNotes, setStudentNotes] = useState('');
   const [isSubmitting, setIsSubmitting] = useState(false);
+  const [uploadProgress, setUploadProgress] = useState<number | null>(null);
+  const [submitError, setSubmitError] = useState<string | null>(null);
 
   // References
   const liveVideoRef = useRef<HTMLVideoElement>(null);
@@ -53,6 +56,11 @@ export const RecordExecutionModal: React.FC<RecordExecutionModalProps> = ({
   const recordedChunksRef = useRef<Blob[]>([]);
   const timerIntervalRef = useRef<any>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
+  // Guarda o arquivo/blob REAL a ser enviado ao Storage. `recordedVideoUrl`
+  // é usado só para o preview local (player de revisão) e não deve ser
+  // salvo como valor final no banco de dados quando for um blob: local.
+  const recordedFileRef = useRef<Blob | File | null>(null);
+  const isDemoVideoRef = useRef(false);
 
   // Initialize camera stream when in camera mode and no recorded video
   useEffect(() => {
@@ -154,6 +162,8 @@ export const RecordExecutionModal: React.FC<RecordExecutionModalProps> = ({
 
       recorder.onstop = () => {
         const blob = new Blob(recordedChunksRef.current, { type: recorder.mimeType || 'video/webm' });
+        recordedFileRef.current = blob;
+        isDemoVideoRef.current = false;
         const videoUrl = URL.createObjectURL(blob);
         setRecordedVideoUrl(videoUrl);
         setIsRecording(false);
@@ -195,14 +205,19 @@ export const RecordExecutionModal: React.FC<RecordExecutionModalProps> = ({
     const file = e.target.files?.[0];
     if (!file) return;
 
+    recordedFileRef.current = file;
+    isDemoVideoRef.current = false;
     const fileUrl = URL.createObjectURL(file);
     setRecordedVideoUrl(fileUrl);
     stopCamera();
   };
 
   const handleUseDemoVideo = () => {
-    // Allows instant demo without webcam hardware
+    // Allows instant demo without webcam hardware. Já é uma URL pública e
+    // permanente, então não precisa (nem deve) passar pelo upload.
     const sampleUrl = 'https://commondatastorage.googleapis.com/gtv-videos-bucket/sample/ForBiggerBlazes.mp4';
+    recordedFileRef.current = null;
+    isDemoVideoRef.current = true;
     setRecordedVideoUrl(sampleUrl);
     stopCamera();
   };
@@ -211,40 +226,70 @@ export const RecordExecutionModal: React.FC<RecordExecutionModalProps> = ({
     if (recordedVideoUrl && recordedVideoUrl.startsWith('blob:')) {
       URL.revokeObjectURL(recordedVideoUrl);
     }
+    recordedFileRef.current = null;
+    isDemoVideoRef.current = false;
+    setSubmitError(null);
+    setUploadProgress(null);
     setRecordedVideoUrl(null);
     setRecordingSeconds(0);
     setIsRecording(false);
   };
 
-  const handleSubmit = (e: React.FormEvent) => {
+  const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!recordedVideoUrl) return;
 
     setIsSubmitting(true);
+    setSubmitError(null);
 
-    const submission: ExecutionSubmission = {
-      id: `sub_${Date.now()}`,
-      studentId: student.id,
-      studentName: student.name,
-      studentAvatar: student.avatar,
-      exerciseId: exercise.id,
-      exerciseName: exercise.name,
-      exerciseMuscleGroup: exercise.muscleGroup,
-      dayOfWeek,
-      videoUrl: recordedVideoUrl,
-      videoDurationSeconds: recordingSeconds > 0 ? recordingSeconds : 15,
-      weightUsed: weightUsed.trim() || undefined,
-      repsDone: repsDone.trim() || undefined,
-      studentNotes: studentNotes.trim() || undefined,
-      submittedAt: new Date().toISOString(),
-      status: 'pending',
-    };
+    const submissionId = `sub_${Date.now()}`;
 
-    setTimeout(() => {
+    try {
+      // Se o vídeo veio da câmera ou de upload de arquivo, ele ainda está
+      // apenas em memória local (blob:...). Precisamos enviá-lo de fato
+      // para o Firebase Storage antes de notificar o professor — só assim
+      // a URL salva será acessível de qualquer dispositivo.
+      let finalVideoUrl = recordedVideoUrl;
+      if (recordedFileRef.current && !isDemoVideoRef.current) {
+        setUploadProgress(0);
+        finalVideoUrl = await uploadExecutionVideo(
+          student.id,
+          submissionId,
+          recordedFileRef.current,
+          (percent) => setUploadProgress(percent)
+        );
+      }
+
+      const submission: ExecutionSubmission = {
+        id: submissionId,
+        studentId: student.id,
+        studentName: student.name,
+        studentAvatar: student.avatar,
+        exerciseId: exercise.id,
+        exerciseName: exercise.name,
+        exerciseMuscleGroup: exercise.muscleGroup,
+        dayOfWeek,
+        videoUrl: finalVideoUrl,
+        videoDurationSeconds: recordingSeconds > 0 ? recordingSeconds : 15,
+        weightUsed: weightUsed.trim() || undefined,
+        repsDone: repsDone.trim() || undefined,
+        studentNotes: studentNotes.trim() || undefined,
+        submittedAt: new Date().toISOString(),
+        status: 'pending',
+      };
+
       onSubmit(submission);
       setIsSubmitting(false);
+      setUploadProgress(null);
       onClose();
-    }, 600);
+    } catch (err) {
+      console.error('Erro ao enviar vídeo de execução:', err);
+      setIsSubmitting(false);
+      setUploadProgress(null);
+      setSubmitError(
+        'Não foi possível enviar o vídeo. Verifique sua conexão com a internet e tente novamente.'
+      );
+    }
   };
 
   const formatSeconds = (secs: number) => {
@@ -543,12 +588,37 @@ export const RecordExecutionModal: React.FC<RecordExecutionModalProps> = ({
                   </p>
                 </div>
 
+                {/* Upload progress */}
+                {isSubmitting && uploadProgress !== null && (
+                  <div className="space-y-1.5">
+                    <div className="flex items-center justify-between text-[11px] font-semibold text-slate-600">
+                      <span>Enviando vídeo...</span>
+                      <span>{Math.round(uploadProgress)}%</span>
+                    </div>
+                    <div className="w-full h-2 rounded-full bg-slate-100 overflow-hidden">
+                      <div
+                        className="h-full bg-indigo-600 rounded-full transition-all duration-200"
+                        style={{ width: `${Math.max(4, uploadProgress)}%` }}
+                      />
+                    </div>
+                  </div>
+                )}
+
+                {/* Submit error */}
+                {submitError && (
+                  <div className="p-3 rounded-2xl bg-rose-50 border border-rose-200 text-rose-800 text-xs flex items-start gap-2">
+                    <AlertCircle className="w-4 h-4 shrink-0 mt-0.5" />
+                    <span>{submitError}</span>
+                  </div>
+                )}
+
                 {/* Submit button */}
                 <div className="flex items-center justify-end gap-2 pt-2">
                   <button
                     type="button"
                     onClick={onClose}
-                    className="px-4 py-2.5 rounded-xl text-xs font-semibold text-slate-600 hover:bg-slate-100 transition cursor-pointer"
+                    disabled={isSubmitting}
+                    className="px-4 py-2.5 rounded-xl text-xs font-semibold text-slate-600 hover:bg-slate-100 transition cursor-pointer disabled:opacity-50"
                   >
                     Cancelar
                   </button>
@@ -558,7 +628,13 @@ export const RecordExecutionModal: React.FC<RecordExecutionModalProps> = ({
                     disabled={isSubmitting}
                     className="px-6 py-2.5 rounded-xl bg-indigo-600 hover:bg-indigo-700 text-white font-bold text-xs sm:text-sm transition shadow-md shadow-indigo-200 cursor-pointer flex items-center gap-2 disabled:opacity-50"
                   >
-                    <span>{isSubmitting ? 'Enviando...' : 'Enviar para o Instrutor'}</span>
+                    <span>
+                      {isSubmitting
+                        ? uploadProgress !== null
+                          ? `Enviando... ${Math.round(uploadProgress)}%`
+                          : 'Enviando...'
+                        : 'Enviar para o Instrutor'}
+                    </span>
                     <ArrowRight className="w-4 h-4" />
                   </button>
                 </div>
