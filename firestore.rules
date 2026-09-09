@@ -1,90 +1,42 @@
 rules_version = '2';
 
-// Regras de segurança do FitPro.
-// Cole este conteúdo em: Console do Firebase > Firestore Database > Regras.
+// Regras de segurança do Firebase Storage do FitPro.
+// Cole este conteúdo em: Console do Firebase > Storage > Regras.
 //
-// Modelo de dados:
-//   instructors/{instructorId}                -> perfil do professor (id = seu UID de Auth)
-//   students/{studentId}                       -> perfil do aluno (id = seu UID de Auth)
-//   students/{studentId}/plans/{planId}        -> fichas de treino do aluno
-//   students/{studentId}/submissions/{subId}   -> vídeos/execuções enviadas pelo aluno
-//   students/{studentId}/cardioLogs/{logId}    -> registros de cardio do aluno
+// Estrutura de arquivos:
+//   submissions/{studentId}/{arquivo}  -> vídeos de execução enviados pelo aluno
 //
-// IMPORTANTE: para consultas do tipo "list" (ex: instrutor buscando todos os
-// seus alunos, ou todas as submissões via collectionGroup), o Firestore NÃO
-// permite verificar permissão fazendo get() em outro documento (como o
-// documento pai). Por isso, sempre que o instrutor precisa LISTAR itens,
-// comparamos o campo instructorId que já está salvo no próprio documento
-// (resource.data.instructorId), em vez de buscar o documento pai.
+// Espelha a lógica de firestore.rules: o próprio aluno pode enviar vídeos na
+// sua pasta, e o instrutor responsável por aquele aluno pode ler (para avaliar).
+// A checagem de "quem é o instrutor do aluno" usa firestore.get() para
+// consultar o documento students/{studentId} e comparar o campo instructorId.
 
-service cloud.firestore {
-  match /databases/{database}/documents {
-
-    function isSignedIn() {
-      return request.auth != null;
-    }
-
-    function isInstructor(instructorId) {
-      return isSignedIn() && request.auth.uid == instructorId;
-    }
-
-    function isStudentOwner(studentId) {
-      return isSignedIn() && request.auth.uid == studentId;
-    }
-
-    // Usado apenas em escritas/leituras de UM documento específico dentro de
-    // uma subcoleção já aninhada sob um studentId conhecido (não em queries
-    // de collectionGroup). Aqui o get() é permitido normalmente.
-    function isOwningInstructorViaParent(studentId) {
-      return isSignedIn() &&
-        get(/databases/$(database)/documents/students/$(studentId)).data.instructorId == request.auth.uid;
-    }
-
-    // Usado em documentos que já têm o campo instructorId gravado neles mesmos
-    // (students, submissions, cardioLogs) — funciona em queries de lista e
-    // de collectionGroup, pois não depende de buscar outro documento.
-    function ownsResourceDirectly() {
-      return isSignedIn() && resource.data.instructorId == request.auth.uid;
-    }
-
-    // Diretório de instrutores: leitura pública (necessária para o aluno
-    // escolher seu professor na tela de cadastro, antes mesmo de logar).
-    // Só o próprio instrutor pode criar/editar seu documento.
-    match /instructors/{instructorId} {
-      allow read: if true;
-      allow create: if isInstructor(instructorId);
-      allow update, delete: if isInstructor(instructorId);
-    }
-
-    match /students/{studentId} {
-      allow read: if isStudentOwner(studentId) || ownsResourceDirectly();
-      // Um aluno pode criar o próprio perfil (autocadastro), OU um instrutor
-      // pode criar o perfil de um aluno em seu nome, desde que o documento já
-      // nasça vinculado a ele (instructorId == seu próprio UID).
-      allow create: if isStudentOwner(studentId) ||
-        (isSignedIn() && request.resource.data.instructorId == request.auth.uid);
-      allow update: if isStudentOwner(studentId) || ownsResourceDirectly();
-      allow delete: if ownsResourceDirectly();
-
-      match /plans/{planId} {
-        // Aqui studentId já é conhecido a partir do caminho da consulta
-        // (não é um collectionGroup), então get() no pai funciona normalmente.
-        allow read: if isStudentOwner(studentId) || isOwningInstructorViaParent(studentId);
-        allow write: if isOwningInstructorViaParent(studentId);
+service firebase.storage {
+  match /b/{bucket}/o {
+    match /submissions/{studentId}/{fileName} {
+      function isSignedIn() {
+        return request.auth != null;
       }
 
-      match /submissions/{submissionId} {
-        allow read: if isStudentOwner(studentId) || ownsResourceDirectly();
-        allow create: if isStudentOwner(studentId);
-        allow update: if isOwningInstructorViaParent(studentId);
-        allow delete: if isStudentOwner(studentId) || isOwningInstructorViaParent(studentId);
+      function isStudentOwner() {
+        return isSignedIn() && request.auth.uid == studentId;
       }
 
-      match /cardioLogs/{logId} {
-        allow read: if isStudentOwner(studentId) || ownsResourceDirectly();
-        allow create: if isStudentOwner(studentId);
-        allow update, delete: if isStudentOwner(studentId);
+      function isOwningInstructor() {
+        return isSignedIn() &&
+          firestore.get(/databases/(default)/documents/students/$(studentId)).data.instructorId
+            == request.auth.uid;
       }
+
+      allow read: if isStudentOwner() || isOwningInstructor();
+
+      // Só o próprio aluno grava seus vídeos, com limite de 100MB e apenas
+      // arquivos de vídeo (evita uso indevido do bucket para outros fins).
+      allow create, update: if isStudentOwner()
+        && request.resource.size < 100 * 1024 * 1024
+        && request.resource.contentType.matches('video/.*');
+
+      allow delete: if isStudentOwner() || isOwningInstructor();
     }
   }
 }
