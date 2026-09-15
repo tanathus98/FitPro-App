@@ -9,6 +9,8 @@ rules_version = '2';
 //   students/{studentId}/plans/{planId}        -> fichas de treino do aluno
 //   students/{studentId}/submissions/{subId}   -> vídeos/execuções enviadas pelo aluno
 //   students/{studentId}/cardioLogs/{logId}    -> registros de cardio do aluno
+//   students/{studentId}/dayProgress/{dateStr} -> progresso diário de treino do aluno
+//   students/{studentId}/measurements/{dateStr}-> medidas corporais do aluno
 //
 // IMPORTANTE: para consultas do tipo "list" (ex: instrutor buscando todos os
 // seus alunos, ou todas as submissões via collectionGroup), o Firestore NÃO
@@ -82,8 +84,23 @@ service cloud.firestore {
 
       match /cardioLogs/{logId} {
         allow read: if isStudentOwner(studentId) || ownsResourceDirectly();
-        allow create: if isStudentOwner(studentId);
-        allow update, delete: if isStudentOwner(studentId);
+        // O próprio aluno pode registrar, e o instrutor também pode
+        // registrar em nome do aluno (usado no "Modo de Prévia" do painel
+        // do professor).
+        allow create: if isStudentOwner(studentId) || isOwningInstructorViaParent(studentId);
+        allow update, delete: if isStudentOwner(studentId) || isOwningInstructorViaParent(studentId);
+      }
+
+      match /dayProgress/{dateStr} {
+        allow read: if isStudentOwner(studentId) || ownsResourceDirectly();
+        allow create, update: if isStudentOwner(studentId) || isOwningInstructorViaParent(studentId);
+        allow delete: if isStudentOwner(studentId) || isOwningInstructorViaParent(studentId);
+      }
+
+      match /measurements/{dateStr} {
+        allow read: if isStudentOwner(studentId) || ownsResourceDirectly();
+        allow create, update: if isStudentOwner(studentId) || isOwningInstructorViaParent(studentId);
+        allow delete: if isStudentOwner(studentId) || isOwningInstructorViaParent(studentId);
       }
     }
   }

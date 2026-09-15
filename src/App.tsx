@@ -8,14 +8,18 @@ import {
   InstructorFeedback,
   Instructor,
   CardioLog,
+  DayProgress,
+  BodyMeasurement,
 } from './types';
 import { AppHeader } from './components/AppHeader';
 import { StudentView } from './components/StudentView';
 import { InstructorView } from './components/InstructorView';
 import { LoginScreen } from './components/LoginScreen';
+import { VerifyEmailScreen } from './components/VerifyEmailScreen';
+import { SetOwnPasswordScreen } from './components/SetOwnPasswordScreen';
 import { User as UserIcon, Dumbbell, LogOut, ShieldCheck, Lock, AlertCircle, Video } from 'lucide-react';
 
-import { watchAuthState, resolveUserRole, signOutUser, createStudentAuthAccount } from './services/authService';
+import { watchAuthState, resolveUserRole, signOutUser, createStudentAuthAccount, sendVerificationEmail, reloadAuthUser, updateOwnPassword } from './services/authService';
 import {
   subscribeInstructors,
   subscribeStudentsByInstructor,
@@ -26,6 +30,10 @@ import {
   subscribeSubmissionsForInstructor,
   subscribeCardioLogsForStudent,
   subscribeCardioLogsForInstructor,
+  subscribeDayProgressForStudent,
+  subscribeDayProgressForInstructor,
+  subscribeMeasurementsForStudent,
+  subscribeMeasurementsForInstructor,
   saveStudent,
   saveInstructor,
   deleteStudent as deleteStudentDoc,
@@ -34,6 +42,9 @@ import {
   updateSubmissionFeedback as updateSubmissionFeedbackDoc,
   addCardioLog,
   deleteCardioLog as deleteCardioLogDoc,
+  saveDayProgress,
+  saveMeasurement,
+  deleteMeasurement as deleteMeasurementDoc,
 } from './services/dataService';
 
 export default function App() {
@@ -50,6 +61,8 @@ export default function App() {
   const [plans, setPlans] = useState<Record<string, WorkoutPlan>>({});
   const [submissions, setSubmissions] = useState<ExecutionSubmission[]>([]);
   const [cardioLogs, setCardioLogs] = useState<CardioLog[]>([]);
+  const [dayProgressList, setDayProgressList] = useState<DayProgress[]>([]);
+  const [measurements, setMeasurements] = useState<BodyMeasurement[]>([]);
 
   const [instructorSubView, setInstructorSubView] = useState<'manage' | 'preview'>('manage');
   const [accessDeniedMessage, setAccessDeniedMessage] = useState<string | null>(null);
@@ -73,6 +86,8 @@ export default function App() {
         setPlans({});
         setSubmissions([]);
         setCardioLogs([]);
+        setDayProgressList([]);
+        setMeasurements([]);
         setAuthChecked(true);
         return;
       }
@@ -101,10 +116,14 @@ export default function App() {
     const unsubStudents = subscribeStudentsByInstructor(uid, setStudents);
     const unsubSubmissions = subscribeSubmissionsForInstructor(uid, setSubmissions);
     const unsubCardio = subscribeCardioLogsForInstructor(uid, setCardioLogs);
+    const unsubDayProgress = subscribeDayProgressForInstructor(uid, setDayProgressList);
+    const unsubMeasurements = subscribeMeasurementsForInstructor(uid, setMeasurements);
     return () => {
       unsubStudents();
       unsubSubmissions();
       unsubCardio();
+      unsubDayProgress();
+      unsubMeasurements();
     };
   }, [role, authUser]);
 
@@ -132,11 +151,15 @@ export default function App() {
     const unsubPlans = subscribePlansForStudent(uid, setPlans);
     const unsubSubmissions = subscribeSubmissionsForStudent(uid, setSubmissions);
     const unsubCardio = subscribeCardioLogsForStudent(uid, setCardioLogs);
+    const unsubDayProgress = subscribeDayProgressForStudent(uid, setDayProgressList);
+    const unsubMeasurements = subscribeMeasurementsForStudent(uid, setMeasurements);
     return () => {
       unsubStudent();
       unsubPlans();
       unsubSubmissions();
       unsubCardio();
+      unsubDayProgress();
+      unsubMeasurements();
     };
   }, [role, authUser]);
 
@@ -157,6 +180,28 @@ export default function App() {
   // --- Não logado: tela de login/cadastro ---
   if (!authUser) {
     return <LoginScreen instructors={instructors} />;
+  }
+
+  // --- Logado, mas ainda não confirmou o e-mail: bloqueia o acesso até ---
+  // --- clicar no link de confirmação enviado no cadastro ---
+  if (!authUser.emailVerified) {
+    return (
+      <VerifyEmailScreen
+        email={authUser.email}
+        onResend={() => sendVerificationEmail(authUser)}
+        onCheckAgain={async () => {
+          const refreshed = await reloadAuthUser(authUser);
+          if (refreshed.emailVerified) {
+            // Clona o objeto para garantir que o React perceba a mudança
+            // de `emailVerified` e refaça a renderização.
+            setAuthUser({ ...refreshed } as typeof refreshed);
+            return true;
+          }
+          return false;
+        }}
+        onLogout={handleLogout}
+      />
+    );
   }
 
   // --- Logado, mas ainda resolvendo se é aluno ou instrutor ---
@@ -209,6 +254,21 @@ export default function App() {
       <div className="min-h-screen w-full flex items-center justify-center bg-slate-50 text-slate-500 text-sm">
         Carregando seu perfil...
       </div>
+    );
+  }
+
+  // --- Aluno cadastrado pelo professor com senha temporária: precisa ---
+  // --- definir a própria senha antes de acessar o app ---
+  if (role === 'aluno' && activeStudent?.mustChangePassword) {
+    return (
+      <SetOwnPasswordScreen
+        studentName={activeStudent.name}
+        onSubmit={async (newPassword) => {
+          await updateOwnPassword(authUser, newPassword);
+          await saveStudent({ ...activeStudent, mustChangePassword: false });
+        }}
+        onLogout={handleLogout}
+      />
     );
   }
 
@@ -276,6 +336,22 @@ export default function App() {
   const handleSaveCardioLog = async (newLog: CardioLog) => {
     const instructorId = resolveInstructorIdForStudent(newLog.studentId);
     await addCardioLog(newLog.studentId, instructorId, newLog);
+  };
+
+  const handleSaveDayProgress = async (progress: DayProgress) => {
+    const instructorId = resolveInstructorIdForStudent(progress.studentId);
+    await saveDayProgress(progress.studentId, instructorId, progress);
+  };
+
+  const handleSaveMeasurement = async (measurement: BodyMeasurement) => {
+    const instructorId = resolveInstructorIdForStudent(measurement.studentId);
+    await saveMeasurement(measurement.studentId, instructorId, measurement);
+  };
+
+  const handleDeleteMeasurement = async (measurementId: string) => {
+    const m = measurements.find((x) => x.id === measurementId);
+    if (!m) return;
+    await deleteMeasurementDoc(m.studentId, measurementId);
   };
 
   const handleDeleteCardioLog = async (logId: string) => {
@@ -405,10 +481,15 @@ export default function App() {
                 instructor={studentInstructor}
                 submissions={submissions}
                 cardioLogs={cardioLogs}
+                dayProgressList={dayProgressList}
                 onSubmitExecution={handleSubmitExecution}
                 onUpdateStudent={handleUpdateStudent}
                 onSaveCardioLog={handleSaveCardioLog}
                 onDeleteCardioLog={handleDeleteCardioLog}
+                onSaveDayProgress={handleSaveDayProgress}
+                measurements={measurements}
+                onSaveMeasurement={handleSaveMeasurement}
+                onDeleteMeasurement={handleDeleteMeasurement}
               />
             ) : (
               <div className="text-center py-20 text-slate-500">
@@ -425,6 +506,7 @@ export default function App() {
                 plans={plans}
                 submissions={submissions}
                 cardioLogs={cardioLogs}
+                dayProgressList={dayProgressList}
                 onSavePlan={handleSavePlan}
                 onCreateStudent={handleCreateStudent}
                 onUpdateStudent={handleUpdateStudent}
@@ -433,6 +515,9 @@ export default function App() {
                 onUpdateSubmissionFeedback={handleUpdateSubmissionFeedback}
                 onSaveCardioLog={handleSaveCardioLog}
                 onDeleteCardioLog={handleDeleteCardioLog}
+                measurements={measurements}
+                onSaveMeasurement={handleSaveMeasurement}
+                onDeleteMeasurement={handleDeleteMeasurement}
               />
             ) : (
               <div>
@@ -455,10 +540,15 @@ export default function App() {
                     instructor={currentInstructor}
                     submissions={submissions}
                     cardioLogs={cardioLogs}
+                    dayProgressList={dayProgressList}
                     onSubmitExecution={handleSubmitExecution}
                     onUpdateStudent={handleUpdateStudent}
                     onSaveCardioLog={handleSaveCardioLog}
                     onDeleteCardioLog={handleDeleteCardioLog}
+                    onSaveDayProgress={handleSaveDayProgress}
+                    measurements={measurements}
+                    onSaveMeasurement={handleSaveMeasurement}
+                    onDeleteMeasurement={handleDeleteMeasurement}
                   />
                 )}
               </div>

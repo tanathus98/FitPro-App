@@ -60,6 +60,10 @@ export interface Student {
   monthlyFee?: number;
   dueDay?: number;
   lastPaymentDate?: string;
+  // `true` quando a conta foi criada pelo professor com uma senha gerada
+  // automaticamente — força o aluno a definir sua própria senha no
+  // primeiro acesso (depois de confirmar o e-mail).
+  mustChangePassword?: boolean;
 }
 
 export interface Instructor {
@@ -81,6 +85,8 @@ export interface SetProgress {
 
 export interface DayProgress {
   studentId: string;
+  studentName?: string;
+  instructorId?: string;
   dateStr: string; // YYYY-MM-DD
   dayOfWeek: DayOfWeek;
   completed: boolean;
@@ -135,6 +141,29 @@ export interface CardioLog {
   inclinePercent?: number;
   avgSpeedKmh?: number;
   avgHeartRateBpm?: number;
+  notes?: string;
+  createdAt: string;
+}
+
+// Um registro por dia (id do documento = dateStr) com a composição
+// corporal do aluno naquela data — substitui a antiga "calculadora de IMC"
+// como forma de acompanhar a evolução física de verdade.
+export interface BodyMeasurement {
+  id: string; // = dateStr
+  studentId: string;
+  studentName?: string;
+  instructorId?: string;
+  dateStr: string; // YYYY-MM-DD
+  weightKg?: number;
+  heightCm?: number;
+  bodyFatPercent?: number;
+  leanMassKg?: number;
+  fatMassKg?: number;
+  waistCm?: number;
+  hipCm?: number;
+  chestCm?: number;
+  armCm?: number;
+  thighCm?: number;
   notes?: string;
   createdAt: string;
 }

@@ -10,7 +10,7 @@ interface CardioTrackerModalProps {
   student?: Student;
   cardioLogs: CardioLog[];
   onClose: () => void;
-  onSaveCardioLog: (log: CardioLog) => void;
+  onSaveCardioLog: (log: CardioLog) => void | Promise<void>;
   onDeleteCardioLog: (logId: string) => void;
 }
 
@@ -38,6 +38,8 @@ export const CardioTrackerModal: React.FC<CardioTrackerModalProps> = ({
   const [notes, setNotes] = useState<string>('');
   const [dateStr, setDateStr] = useState<string>(new Date().toISOString().split('T')[0]);
   const [saveSuccess, setSaveSuccess] = useState<boolean>(false);
+  const [isSaving, setIsSaving] = useState<boolean>(false);
+  const [saveError, setSaveError] = useState<string | null>(null);
 
   // When equipment changes, reset intensity to first of that equipment
   const handleEquipmentChange = (eq: CardioEquipment) => {
@@ -77,8 +79,8 @@ export const CardioTrackerModal: React.FC<CardioTrackerModalProps> = ({
   const totalDistance = studentLogs.reduce((acc, log) => acc + (log.distanceKm || 0), 0);
 
   // Handle Save
-  const handleSave = () => {
-    if (!student) return;
+  const handleSave = async () => {
+    if (!student || isSaving) return;
 
     const newLog: CardioLog = {
       id: `cardio_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`,
@@ -99,12 +101,25 @@ export const CardioTrackerModal: React.FC<CardioTrackerModalProps> = ({
       createdAt: new Date().toISOString(),
     };
 
-    onSaveCardioLog(newLog);
-    setSaveSuccess(true);
-    setTimeout(() => {
-      setSaveSuccess(false);
-      setActiveTab('history');
-    }, 1200);
+    setSaveError(null);
+    setIsSaving(true);
+    try {
+      // Aguarda a gravação real no Firestore antes de comemorar — se a
+      // escrita falhar (ex: regra de permissão), o erro cai no catch e o
+      // usuário é avisado, em vez de ver "sucesso" para um dado que não
+      // foi salvo.
+      await onSaveCardioLog(newLog);
+      setSaveSuccess(true);
+      setTimeout(() => {
+        setSaveSuccess(false);
+        setActiveTab('history');
+      }, 1200);
+    } catch (err) {
+      console.error('Falha ao salvar registro de cardio:', err);
+      setSaveError('Não foi possível salvar este registro. Verifique sua conexão e tente novamente.');
+    } finally {
+      setIsSaving(false);
+    }
   };
 
   // Helper for equipment icon
@@ -675,29 +690,36 @@ export const CardioTrackerModal: React.FC<CardioTrackerModalProps> = ({
         {/* Footer */}
         <div className="p-4 sm:p-5 border-t border-slate-100 bg-slate-50/80 flex flex-col sm:flex-row items-stretch sm:items-center justify-between gap-3">
           {activeTab === 'calculator' && student ? (
-            <button
-              id="save-cardio-log-btn"
-              type="button"
-              onClick={handleSave}
-              disabled={saveSuccess}
-              className={`px-5 py-2.5 rounded-xl font-bold text-xs transition flex items-center justify-center gap-2 cursor-pointer shadow-xs ${
-                saveSuccess
-                  ? 'bg-emerald-600 text-white'
-                  : 'bg-orange-600 hover:bg-orange-700 text-white shadow-orange-200'
-              }`}
-            >
-              {saveSuccess ? (
-                <>
-                  <Check className="w-4 h-4" />
-                  <span>Cardio Registrado com Sucesso!</span>
-                </>
-              ) : (
-                <>
-                  <Flame className="w-4 h-4" />
-                  <span>Salvar {result.caloriesBurned} kcal no Perfil ({student.name.split(' ')[0]})</span>
-                </>
+            <div className="flex flex-col gap-1.5">
+              <button
+                id="save-cardio-log-btn"
+                type="button"
+                onClick={handleSave}
+                disabled={saveSuccess || isSaving}
+                className={`px-5 py-2.5 rounded-xl font-bold text-xs transition flex items-center justify-center gap-2 cursor-pointer shadow-xs ${
+                  saveSuccess
+                    ? 'bg-emerald-600 text-white'
+                    : 'bg-orange-600 hover:bg-orange-700 text-white shadow-orange-200 disabled:opacity-60'
+                }`}
+              >
+                {saveSuccess ? (
+                  <>
+                    <Check className="w-4 h-4" />
+                    <span>Cardio Registrado com Sucesso!</span>
+                  </>
+                ) : isSaving ? (
+                  <span>Salvando...</span>
+                ) : (
+                  <>
+                    <Flame className="w-4 h-4" />
+                    <span>Salvar {result.caloriesBurned} kcal no Perfil ({student.name.split(' ')[0]})</span>
+                  </>
+                )}
+              </button>
+              {saveError && (
+                <span className="text-[11px] font-semibold text-rose-600">{saveError}</span>
               )}
-            </button>
+            </div>
           ) : (
             <div className="text-[11px] text-slate-500 font-medium">
               {activeTab === 'calculator'

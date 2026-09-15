@@ -4,17 +4,19 @@ import {
   Check, Calendar, ArrowUp, ArrowDown, Video, Copy, 
   Sparkles, ExternalLink, ShieldCheck, ChevronRight, Eye,
   Search, X, AlertCircle, Play, Star, Clock, CheckCircle2, MessageSquare, Filter, ArrowLeft,
-  DollarSign, CreditCard, AlertTriangle, Wallet, Scale, Flame, Camera
+  DollarSign, CreditCard, AlertTriangle, Wallet, Scale, Flame, Camera, RefreshCw
 } from 'lucide-react';
-import { DayOfWeek, Exercise, Instructor, Student, WorkoutPlan, ExecutionSubmission, InstructorFeedback, PaymentStatus, CardioLog } from '../types';
+import { DayOfWeek, Exercise, Instructor, Student, WorkoutPlan, ExecutionSubmission, InstructorFeedback, PaymentStatus, CardioLog, DayProgress, BodyMeasurement } from '../types';
+import { validatePassword, generateRandomPassword } from '../utils/passwordValidation';
 import { DAYS_CONFIG } from '../data/initialData';
 import { AvatarUploadModal } from './AvatarUploadModal';
 import { EXERCISE_LIBRARY, ExerciseLibraryItem, MUSCLE_GROUPS } from '../data/exerciseLibrary';
 import { MiniVideoPlayer } from './MiniVideoPlayer';
 import { ExerciseVideoModal } from './ExerciseVideoModal';
 import { SubmissionDetailModal } from './SubmissionDetailModal';
-import { BMICalculatorModal, getBMICategory } from './BMICalculatorModal';
 import { CardioTrackerModal } from './CardioTrackerModal';
+import { HistoryModal } from './HistoryModal';
+import { MeasurementsModal } from './MeasurementsModal';
 import { uploadExerciseVideo } from '../services/dataService';
 
 interface InstructorViewProps {
@@ -24,6 +26,8 @@ interface InstructorViewProps {
   plans: Record<string, WorkoutPlan>;
   submissions?: ExecutionSubmission[];
   cardioLogs?: CardioLog[];
+  dayProgressList?: DayProgress[];
+  measurements?: BodyMeasurement[];
   onSavePlan: (plan: WorkoutPlan) => void;
   onCreateStudent: (student: Student, initialPlan: WorkoutPlan, password: string) => Promise<void>;
   onUpdateStudent: (student: Student) => void;
@@ -34,6 +38,8 @@ interface InstructorViewProps {
   onUpdateInstructor?: (instructor: Instructor) => void;
   onSaveCardioLog?: (log: CardioLog) => void;
   onDeleteCardioLog?: (logId: string) => void;
+  onSaveMeasurement?: (measurement: BodyMeasurement) => void | Promise<void>;
+  onDeleteMeasurement?: (measurementId: string) => void;
 }
 
 export const InstructorView: React.FC<InstructorViewProps> = ({
@@ -43,6 +49,8 @@ export const InstructorView: React.FC<InstructorViewProps> = ({
   plans,
   submissions = [],
   cardioLogs = [],
+  dayProgressList = [],
+  measurements = [],
   onSavePlan,
   onCreateStudent,
   onUpdateStudent,
@@ -53,11 +61,26 @@ export const InstructorView: React.FC<InstructorViewProps> = ({
   onUpdateInstructor,
   onSaveCardioLog,
   onDeleteCardioLog,
+  onSaveMeasurement,
+  onDeleteMeasurement,
 }) => {
   const [activeTab, setActiveTab] = useState<'workouts' | 'evaluations'>('workouts');
   const [selectedStudentId, setSelectedStudentId] = useState<string>(students[0]?.id || '');
   const [selectedDay, setSelectedDay] = useState<DayOfWeek>('segunda');
   const [searchQuery, setSearchQuery] = useState('');
+
+  // Data de hoje, para checar rapidamente (por studentId) se o aluno já
+  // treinou hoje — mesma chave usada pelo StudentView ao persistir.
+  const todayDateStr = new Date().toISOString().split('T')[0];
+  const todayCompletionByStudentId = React.useMemo(() => {
+    const map: Record<string, DayProgress> = {};
+    dayProgressList.forEach((p) => {
+      if (p.dateStr === todayDateStr && p.completed) {
+        map[p.studentId] = p;
+      }
+    });
+    return map;
+  }, [dayProgressList, todayDateStr]);
   const [mobileWorkoutSubView, setMobileWorkoutSubView] = useState<'students' | 'plan'>('students');
   const [paymentFilter, setPaymentFilter] = useState<'all' | 'em_dia' | 'atrasado'>('all');
   const [showAvatarModal, setShowAvatarModal] = useState(false);
@@ -71,8 +94,9 @@ export const InstructorView: React.FC<InstructorViewProps> = ({
   const [showAddStudentModal, setShowAddStudentModal] = useState(false);
   const [showEditPaymentModal, setShowEditPaymentModal] = useState(false);
   const [showAddExerciseModal, setShowAddExerciseModal] = useState(false);
-  const [showBMIModal, setShowBMIModal] = useState(false);
+  const [showMeasurementsModal, setShowMeasurementsModal] = useState(false);
   const [showCardioModal, setShowCardioModal] = useState(false);
+  const [showHistoryModal, setShowHistoryModal] = useState(false);
   const [editingExercise, setEditingExercise] = useState<Exercise | null>(null);
   const [videoPreviewExercise, setVideoPreviewExercise] = useState<Exercise | null>(null);
   const [toastMessage, setToastMessage] = useState<string | null>(null);
@@ -378,17 +402,6 @@ export const InstructorView: React.FC<InstructorViewProps> = ({
         </div>
 
         <div className="flex items-center gap-2 w-full md:w-auto">
-          <button
-            id="open-bmi-calc-header-btn"
-            type="button"
-            onClick={() => setShowBMIModal(true)}
-            className="w-full sm:w-auto px-4 py-2.5 rounded-xl bg-white border border-slate-200 hover:bg-indigo-50/50 hover:border-indigo-300 text-slate-700 hover:text-indigo-700 text-xs font-semibold transition shadow-2xs flex items-center justify-center gap-2 cursor-pointer"
-            title="Abrir Calculadora de IMC"
-          >
-            <Scale className="w-4 h-4 text-indigo-600" />
-            <span>Calculadora de IMC</span>
-          </button>
-
           <button
             id="add-student-btn"
             onClick={() => setShowAddStudentModal(true)}
@@ -697,6 +710,7 @@ export const InstructorView: React.FC<InstructorViewProps> = ({
                   const isSelected = s.id === selectedStudent?.id;
                   const studentPlan = s.currentPlanId ? plans[s.currentPlanId] : null;
                   const isUpToDate = (s.paymentStatus || 'em_dia') === 'em_dia';
+                  const trainedToday = !!todayCompletionByStudentId[s.id];
 
                   return (
                     <div
@@ -713,11 +727,21 @@ export const InstructorView: React.FC<InstructorViewProps> = ({
                       }`}
                     >
                       <div className="flex items-center gap-3 min-w-0 flex-1">
-                        <img
-                          src={s.avatar}
-                          alt={s.name}
-                          className="w-11 h-11 rounded-xl object-cover shrink-0 border border-slate-200"
-                        />
+                        <div className="relative shrink-0">
+                          <img
+                            src={s.avatar}
+                            alt={s.name}
+                            className="w-11 h-11 rounded-xl object-cover border border-slate-200"
+                          />
+                          {trainedToday && (
+                            <span
+                              title="Treinou hoje"
+                              className="absolute -bottom-1 -right-1 w-5 h-5 rounded-full bg-emerald-500 border-2 border-white flex items-center justify-center shadow-sm"
+                            >
+                              <Check className="w-3 h-3 text-white" strokeWidth={3} />
+                            </span>
+                          )}
+                        </div>
                         <div className="min-w-0 flex-1">
                           <div className="flex items-center justify-between gap-1">
                             <h4 className="text-xs font-bold text-slate-900 truncate">{s.name}</h4>
@@ -726,6 +750,12 @@ export const InstructorView: React.FC<InstructorViewProps> = ({
                           
                           {/* Financial & Plan Badge */}
                           <div className="mt-1 flex items-center gap-1.5 flex-wrap">
+                            {trainedToday && (
+                              <span className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded-md text-[10px] font-bold bg-emerald-100/80 text-emerald-800 border border-emerald-200/80">
+                                <Check className="w-2.5 h-2.5 text-emerald-600" strokeWidth={3} />
+                                Treinou hoje
+                              </span>
+                            )}
                             {isUpToDate ? (
                               <span className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded-md text-[10px] font-bold bg-emerald-100/80 text-emerald-800 border border-emerald-200/80">
                                 <CheckCircle2 className="w-2.5 h-2.5 text-emerald-600" />
@@ -791,25 +821,45 @@ export const InstructorView: React.FC<InstructorViewProps> = ({
                         <span>{selectedStudent.weightKg}kg • {selectedStudent.heightCm}cm • {selectedStudent.goal}</span>
                         <span>•</span>
                         {(() => {
-                          const hM = (selectedStudent.heightCm || 170) / 100;
-                          const bmi = hM > 0 ? Math.round(((selectedStudent.weightKg || 70) / (hM * hM)) * 10) / 10 : 0;
-                          const cat = getBMICategory(bmi);
+                          const studentMeasurements = measurements
+                            .filter((m) => m.studentId === selectedStudent.id)
+                            .sort((a, b) => (a.dateStr < b.dateStr ? 1 : -1));
+                          const latest = studentMeasurements[0];
                           return (
                             <button
-                              id="instructor-open-student-bmi-btn"
+                              id="instructor-open-student-measurements-btn"
                               type="button"
-                              onClick={() => setShowBMIModal(true)}
+                              onClick={() => setShowMeasurementsModal(true)}
                               className="inline-flex items-center gap-1 px-2 py-0.5 rounded-lg bg-indigo-50 hover:bg-indigo-100 border border-indigo-200/80 text-indigo-700 font-bold transition cursor-pointer group shadow-2xs text-[11px]"
-                              title="Calcular ou atualizar IMC do aluno"
+                              title="Registrar ou ver evolução das medidas do aluno"
                             >
                               <Scale className="w-3 h-3 text-indigo-600 group-hover:scale-110 transition-transform" />
-                              <span>IMC: {bmi}</span>
-                              <span className={`text-[10px] font-semibold px-1.5 py-0.2 rounded-full ${cat.bgColor} ${cat.textColor} border ${cat.borderColor}`}>
-                                {cat.label}
-                              </span>
+                              {latest ? (
+                                <>
+                                  <span>Gordura: {latest.bodyFatPercent ?? '—'}%</span>
+                                  {latest.leanMassKg !== undefined && (
+                                    <span className="text-[10px] font-semibold px-1.5 py-0.2 rounded-full bg-indigo-100 text-indigo-800 border border-indigo-200">
+                                      M. Magra {latest.leanMassKg}kg
+                                    </span>
+                                  )}
+                                </>
+                              ) : (
+                                <span>Medidas</span>
+                              )}
                             </button>
                           );
                         })()}
+                        <span>•</span>
+                        <button
+                          id="instructor-open-student-history-btn"
+                          type="button"
+                          onClick={() => setShowHistoryModal(true)}
+                          className="inline-flex items-center gap-1 px-2 py-0.5 rounded-lg bg-slate-100 hover:bg-slate-200 border border-slate-200/80 text-slate-700 font-bold transition cursor-pointer group shadow-2xs text-[11px]"
+                          title="Ver histórico de treinos e cardio deste aluno por data"
+                        >
+                          <Calendar className="w-3 h-3 text-slate-600 group-hover:scale-110 transition-transform" />
+                          <span>Histórico</span>
+                        </button>
                       </div>
                     </div>
                   </div>
@@ -1481,7 +1531,7 @@ export const InstructorView: React.FC<InstructorViewProps> = ({
             await onCreateStudent(student, plan, password);
             setSelectedStudentId(student.id);
             setShowAddStudentModal(false);
-            showToast(`Aluno ${student.name} cadastrado com sucesso!`);
+            showToast(`Aluno ${student.name} cadastrado com sucesso! Enviamos um link de confirmação para o e-mail dele(a).`);
           }}
         />
       )}
@@ -1499,32 +1549,43 @@ export const InstructorView: React.FC<InstructorViewProps> = ({
         />
       )}
 
-      {/* Modal: Calculadora de IMC */}
-      {showBMIModal && (
-        <BMICalculatorModal
-          initialWeight={selectedStudent?.weightKg || 70}
-          initialHeight={selectedStudent?.heightCm || 170}
-          studentName={selectedStudent?.name}
-          onClose={() => setShowBMIModal(false)}
-          onSaveToStudent={(weightKg, heightCm) => {
-            if (selectedStudent) {
-              const updated = {
-                ...selectedStudent,
-                weightKg,
-                heightCm,
-              };
-              onUpdateStudent(updated);
-              showToast(`Peso e altura de ${selectedStudent.name} atualizados com sucesso!`);
-            }
-          }}
-        />
-      )}
-
       {/* Video Modal Preview */}
       {videoPreviewExercise && (
         <ExerciseVideoModal
           exercise={videoPreviewExercise}
           onClose={() => setVideoPreviewExercise(null)}
+        />
+      )}
+
+      {/* Modal: Histórico de treinos, cardio e vídeos por data */}
+      {showHistoryModal && selectedStudent && (
+        <HistoryModal
+          student={selectedStudent}
+          plan={selectedStudent.currentPlanId ? plans[selectedStudent.currentPlanId] : undefined}
+          dayProgressList={dayProgressList.filter((p) => p.studentId === selectedStudent.id)}
+          cardioLogs={cardioLogs.filter((l) => l.studentId === selectedStudent.id)}
+          submissions={submissions.filter((s) => s.studentId === selectedStudent.id)}
+          onClose={() => setShowHistoryModal(false)}
+        />
+      )}
+
+      {/* Modal: Registro de Medidas Corporais do aluno selecionado */}
+      {showMeasurementsModal && selectedStudent && (
+        <MeasurementsModal
+          student={selectedStudent}
+          measurements={measurements.filter((m) => m.studentId === selectedStudent.id)}
+          onClose={() => setShowMeasurementsModal(false)}
+          onSaveMeasurement={async (m) => {
+            if (onSaveMeasurement) {
+              await onSaveMeasurement(m);
+            }
+            if (m.weightKg) {
+              onUpdateStudent({ ...selectedStudent, weightKg: m.weightKg });
+            }
+          }}
+          onDeleteMeasurement={(id) => {
+            if (onDeleteMeasurement) onDeleteMeasurement(id);
+          }}
         />
       )}
 
@@ -2006,7 +2067,8 @@ interface NewStudentModalProps {
 const NewStudentModal: React.FC<NewStudentModalProps> = ({ instructorId, onClose, onCreate }) => {
   const [name, setName] = useState('');
   const [email, setEmail] = useState('');
-  const [password, setPassword] = useState('');
+  const [password, setPassword] = useState(() => generateRandomPassword());
+  const [passwordCopied, setPasswordCopied] = useState(false);
   const [phone, setPhone] = useState('');
   const [goal, setGoal] = useState('Hipertrofia & Ganho de Massa');
   const [level, setLevel] = useState<'Iniciante' | 'Intermediário' | 'Avançado'>('Iniciante');
@@ -2019,6 +2081,17 @@ const NewStudentModal: React.FC<NewStudentModalProps> = ({ instructorId, onClose
   const [formError, setFormError] = useState('');
   const [isSubmitting, setIsSubmitting] = useState(false);
 
+  const handleCopyPassword = async () => {
+    try {
+      await navigator.clipboard.writeText(password);
+      setPasswordCopied(true);
+      setTimeout(() => setPasswordCopied(false), 2000);
+    } catch {
+      // Clipboard pode falhar em contexto não seguro/sem permissão — a senha
+      // continua visível no campo pra copiar manualmente.
+    }
+  };
+
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setFormError('');
@@ -2027,8 +2100,9 @@ const NewStudentModal: React.FC<NewStudentModalProps> = ({ instructorId, onClose
       setFormError('Informe um e-mail válido: ele será usado para o aluno entrar no app.');
       return;
     }
-    if (password.length < 6) {
-      setFormError('A senha precisa ter pelo menos 6 caracteres.');
+    const passwordError = validatePassword(password);
+    if (passwordError) {
+      setFormError(passwordError);
       return;
     }
 
@@ -2053,6 +2127,7 @@ const NewStudentModal: React.FC<NewStudentModalProps> = ({ instructorId, onClose
       dueDay: Number(dueDay) || 10,
       paymentStatus,
       lastPaymentDate: paymentStatus === 'em_dia' ? new Date().toISOString().split('T')[0] : undefined,
+      mustChangePassword: true,
     };
 
     const initialPlan: WorkoutPlan = {
@@ -2145,16 +2220,39 @@ const NewStudentModal: React.FC<NewStudentModalProps> = ({ instructorId, onClose
               <label className="text-[11px] font-bold text-slate-600 uppercase tracking-wider block mb-1">
                 Senha de Acesso do Aluno *
               </label>
-              <input
-                type="text"
-                required
-                minLength={6}
-                id="new-student-password"
-                value={password}
-                onChange={(e) => setPassword(e.target.value)}
-                placeholder="Mínimo 6 caracteres"
-                className="w-full bg-slate-50 border border-slate-200 rounded-xl px-3 py-2 text-xs text-slate-900 focus:outline-none focus:border-indigo-500 focus:bg-white"
-              />
+              <div className="flex items-center gap-1.5">
+                <input
+                  type="text"
+                  required
+                  minLength={6}
+                  id="new-student-password"
+                  value={password}
+                  onChange={(e) => setPassword(e.target.value)}
+                  className="w-full bg-slate-50 border border-slate-200 rounded-xl px-3 py-2 text-xs font-mono font-bold text-slate-900 focus:outline-none focus:border-indigo-500 focus:bg-white"
+                />
+                <button
+                  type="button"
+                  id="new-student-copy-password-btn"
+                  onClick={handleCopyPassword}
+                  title="Copiar senha"
+                  className="shrink-0 p-2 rounded-xl bg-slate-100 hover:bg-indigo-100 border border-slate-200 text-slate-600 hover:text-indigo-700 transition cursor-pointer"
+                >
+                  {passwordCopied ? <Check className="w-3.5 h-3.5 text-emerald-600" /> : <Copy className="w-3.5 h-3.5" />}
+                </button>
+                <button
+                  type="button"
+                  id="new-student-regenerate-password-btn"
+                  onClick={() => setPassword(generateRandomPassword())}
+                  title="Gerar outra senha"
+                  className="shrink-0 p-2 rounded-xl bg-slate-100 hover:bg-indigo-100 border border-slate-200 text-slate-600 hover:text-indigo-700 transition cursor-pointer"
+                >
+                  <RefreshCw className="w-3.5 h-3.5" />
+                </button>
+              </div>
+              <p className="text-[10px] text-slate-400 mt-1">
+                Gerada automaticamente — copie e encaminhe ao aluno. Ele vai poder trocar por uma senha própria
+                assim que confirmar o e-mail.
+              </p>
             </div>
             <div>
               <label className="text-[11px] font-bold text-slate-600 uppercase tracking-wider block mb-1">

@@ -13,14 +13,13 @@ import {
   X,
   Phone,
   Target,
-  Scale,
   Award,
   Sparkles,
   FileText
 } from 'lucide-react';
 import { Instructor, UserRole } from '../types';
-import { BMICalculatorModal, getBMICategory } from './BMICalculatorModal';
 import { registerInstructor, registerStudent, signIn, resetPassword } from '../services/authService';
+import { validatePassword, PASSWORD_HINT } from '../utils/passwordValidation';
 
 interface LoginScreenProps {
   instructors: Instructor[];
@@ -66,7 +65,6 @@ export const LoginScreen: React.FC<LoginScreenProps> = ({ instructors }) => {
 
   // Success Feedback
   const [successToast, setSuccessToast] = useState<string | null>(null);
-  const [showBMIModal, setShowBMIModal] = useState<boolean>(false);
 
   const showNotification = (msg: string) => {
     setSuccessToast(msg);
@@ -145,8 +143,9 @@ export const LoginScreen: React.FC<LoginScreenProps> = ({ instructors }) => {
       setLoginError('Informe um e-mail válido para acessar sua conta.');
       return;
     }
-    if (studentPassword.length < 6) {
-      setLoginError('A senha precisa ter pelo menos 6 caracteres.');
+    const studentPasswordError = validatePassword(studentPassword);
+    if (studentPasswordError) {
+      setLoginError(studentPasswordError);
       return;
     }
     if (!studentConsent) {
@@ -177,7 +176,7 @@ export const LoginScreen: React.FC<LoginScreenProps> = ({ instructors }) => {
         paymentStatus: 'em_dia',
         lastPaymentDate: new Date().toISOString().split('T')[0],
       });
-      showNotification(`Conta criada com sucesso! Bem-vindo(a), ${studentName.trim()}!`);
+      showNotification(`Conta criada com sucesso! Enviamos um link de confirmação para ${studentEmail.trim()} — confirme para liberar o acesso.`);
       // O listener de auth no App.tsx detecta a nova sessão automaticamente.
     } catch (err: any) {
       setLoginError(friendlyAuthError(err));
@@ -198,8 +197,9 @@ export const LoginScreen: React.FC<LoginScreenProps> = ({ instructors }) => {
       setLoginError('Informe um e-mail válido para acessar sua conta.');
       return;
     }
-    if (instructorPassword.length < 6) {
-      setLoginError('A senha precisa ter pelo menos 6 caracteres.');
+    const instructorPasswordError = validatePassword(instructorPassword);
+    if (instructorPasswordError) {
+      setLoginError(instructorPasswordError);
       return;
     }
     if (!instructorConsent) {
@@ -215,7 +215,7 @@ export const LoginScreen: React.FC<LoginScreenProps> = ({ instructors }) => {
         specialty: instructorSpecialty.trim() || 'Personal Trainer & Musculação',
         avatar: `https://images.unsplash.com/photo-${1534528741775 + Math.floor(Math.random() * 600)}?w=200&auto=format&fit=crop&q=80`,
       });
-      showNotification(`Professor ${instructorName.trim()} cadastrado com sucesso!`);
+      showNotification(`Professor ${instructorName.trim()} cadastrado com sucesso! Enviamos um link de confirmação para ${instructorEmail.trim()} — confirme para liberar o acesso.`);
       // O listener de auth no App.tsx detecta a nova sessão automaticamente.
     } catch (err: any) {
       setLoginError(friendlyAuthError(err));
@@ -246,17 +246,6 @@ export const LoginScreen: React.FC<LoginScreenProps> = ({ instructors }) => {
           <p className="text-xs sm:text-sm text-slate-500 mt-1 max-w-md mx-auto">
             Plataforma para professores e alunos com fichas de treinos personalizadas e isolamento de turmas
           </p>
-          <div className="mt-2.5 flex justify-center">
-            <button
-              id="login-open-bmi-calc-btn"
-              type="button"
-              onClick={() => setShowBMIModal(true)}
-              className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full bg-white border border-slate-200 hover:border-indigo-300 text-xs font-semibold text-slate-600 hover:text-indigo-600 shadow-2xs transition cursor-pointer"
-            >
-              <Scale className="w-3.5 h-3.5 text-indigo-600" />
-              <span>Calculadora de IMC Livre</span>
-            </button>
-          </div>
         </div>
 
         {/* Main Card */}
@@ -500,6 +489,7 @@ export const LoginScreen: React.FC<LoginScreenProps> = ({ instructors }) => {
                           onChange={(e) => setStudentPassword(e.target.value)}
                           className="w-full px-3.5 py-2.5 bg-slate-50 border border-slate-200 rounded-xl text-xs sm:text-sm text-slate-900 focus:outline-none focus:border-indigo-500 focus:bg-white transition"
                         />
+                        <p className="text-[10px] text-slate-400 mt-1">{PASSWORD_HINT}</p>
                       </div>
                     </div>
 
@@ -576,26 +566,9 @@ export const LoginScreen: React.FC<LoginScreenProps> = ({ instructors }) => {
                       </div>
                     </div>
 
-                    {/* Peso e Altura com prévia de IMC */}
+                    {/* Peso e Altura */}
                     <div>
-                      <div className="flex items-center justify-between mb-1">
-                        <span className="text-xs font-bold text-slate-700">Biometria do Aluno</span>
-                        {(() => {
-                          const hM = (studentHeight || 175) / 100;
-                          const bmi = hM > 0 ? Math.round(((studentWeight || 72) / (hM * hM)) * 10) / 10 : 0;
-                          const cat = getBMICategory(bmi);
-                          return (
-                            <button
-                              type="button"
-                              onClick={() => setShowBMIModal(true)}
-                              className="inline-flex items-center gap-1 text-[11px] font-bold text-indigo-600 hover:text-indigo-800 transition cursor-pointer"
-                            >
-                              <Scale className="w-3 h-3 text-indigo-600" />
-                              <span>IMC estimado: <strong>{bmi}</strong> ({cat.label})</span>
-                            </button>
-                          );
-                        })()}
-                      </div>
+                      <span className="text-xs font-bold text-slate-700 block mb-1">Biometria do Aluno</span>
                       <div className="grid grid-cols-2 gap-3">
                         <div>
                           <label className="block text-[11px] font-medium text-slate-500 mb-1">
@@ -726,6 +699,7 @@ export const LoginScreen: React.FC<LoginScreenProps> = ({ instructors }) => {
                         onChange={(e) => setInstructorPassword(e.target.value)}
                         className="w-full px-3.5 py-2.5 bg-slate-50 border border-slate-200 rounded-xl text-xs sm:text-sm text-slate-900 focus:outline-none focus:border-indigo-500 focus:bg-white transition"
                       />
+                      <p className="text-[10px] text-slate-400 mt-1">{PASSWORD_HINT}</p>
                     </div>
 
                     {/* CREF */}
@@ -800,21 +774,6 @@ export const LoginScreen: React.FC<LoginScreenProps> = ({ instructors }) => {
           <span>FitPro • Separação completa de fichas e turmas por professor</span>
         </p>
       </div>
-
-      {/* Modal: Calculadora de IMC */}
-      {showBMIModal && (
-        <BMICalculatorModal
-          initialWeight={studentWeight || 72}
-          initialHeight={studentHeight || 175}
-          studentName={mode === 'cadastro' && studentName ? studentName : undefined}
-          onClose={() => setShowBMIModal(false)}
-          onSaveToStudent={(weightKg, heightCm) => {
-            setStudentWeight(weightKg);
-            setStudentHeight(heightCm);
-            showNotification(`Peso (${weightKg}kg) e altura (${heightCm}cm) atualizados no formulário de cadastro!`);
-          }}
-        />
-      )}
 
       {/* Modal: Esqueci minha senha */}
       {showForgotPassword && (

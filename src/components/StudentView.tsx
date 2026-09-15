@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import confetti from 'canvas-confetti';
 import { 
   Calendar, CheckCircle2, Clock, Dumbbell, Flame, Info, 
@@ -6,15 +6,16 @@ import {
   RotateCcw, ShieldCheck, Video, Star, MessageSquare, AlertCircle, Camera, Scale,
   Bike, Footprints, TrendingUp, Activity
 } from 'lucide-react';
-import { DayOfWeek, Exercise, Student, WorkoutPlan, Instructor, ExecutionSubmission, CardioLog } from '../types';
+import { DayOfWeek, Exercise, Student, WorkoutPlan, Instructor, ExecutionSubmission, CardioLog, DayProgress, BodyMeasurement } from '../types';
 import { DAYS_CONFIG, getTodayDayOfWeek } from '../data/initialData';
 import { MiniVideoPlayer } from './MiniVideoPlayer';
 import { ExerciseVideoModal } from './ExerciseVideoModal';
 import { RestTimer } from './RestTimer';
 import { RecordExecutionModal } from './RecordExecutionModal';
 import { SubmissionDetailModal } from './SubmissionDetailModal';
-import { BMICalculatorModal, getBMICategory } from './BMICalculatorModal';
 import { CardioTrackerModal } from './CardioTrackerModal';
+import { HistoryModal } from './HistoryModal';
+import { MeasurementsModal } from './MeasurementsModal';
 import { AvatarUploadModal } from './AvatarUploadModal';
 
 interface StudentViewProps {
@@ -23,10 +24,15 @@ interface StudentViewProps {
   instructor?: Instructor;
   submissions?: ExecutionSubmission[];
   cardioLogs?: CardioLog[];
+  dayProgressList?: DayProgress[];
+  measurements?: BodyMeasurement[];
   onSubmitExecution?: (submission: ExecutionSubmission) => void;
   onUpdateStudent?: (student: Student) => void;
-  onSaveCardioLog?: (log: CardioLog) => void;
+  onSaveCardioLog?: (log: CardioLog) => void | Promise<void>;
   onDeleteCardioLog?: (logId: string) => void;
+  onSaveDayProgress?: (progress: DayProgress) => void | Promise<void>;
+  onSaveMeasurement?: (measurement: BodyMeasurement) => void | Promise<void>;
+  onDeleteMeasurement?: (measurementId: string) => void;
 }
 
 export const StudentView: React.FC<StudentViewProps> = ({
@@ -35,10 +41,15 @@ export const StudentView: React.FC<StudentViewProps> = ({
   instructor,
   submissions = [],
   cardioLogs = [],
+  dayProgressList = [],
+  measurements = [],
   onSubmitExecution,
   onUpdateStudent,
   onSaveCardioLog,
   onDeleteCardioLog,
+  onSaveDayProgress,
+  onSaveMeasurement,
+  onDeleteMeasurement,
 }) => {
   const [selectedDay, setSelectedDay] = useState<DayOfWeek>(getTodayDayOfWeek());
   const [activeExerciseForModal, setActiveExerciseForModal] = useState<Exercise | null>(null);
@@ -50,19 +61,21 @@ export const StudentView: React.FC<StudentViewProps> = ({
   const [recordingExercise, setRecordingExercise] = useState<Exercise | null>(null);
   const [viewingSubmission, setViewingSubmission] = useState<ExecutionSubmission | null>(null);
   const [submissionSuccessToast, setSubmissionSuccessToast] = useState<string | null>(null);
-  const [showBMIModal, setShowBMIModal] = useState<boolean>(false);
   const [showAvatarModal, setShowAvatarModal] = useState<boolean>(false);
   const [showCardioModal, setShowCardioModal] = useState<boolean>(false);
+  const [showHistoryModal, setShowHistoryModal] = useState<boolean>(false);
+  const [showMeasurementsModal, setShowMeasurementsModal] = useState<boolean>(false);
 
   // Student cardio analytics
   const studentCardioLogs = cardioLogs.filter((l) => l.studentId === student.id);
   const totalCardioCalories = studentCardioLogs.reduce((acc, l) => acc + (l.caloriesBurned || 0), 0);
   const totalCardioMinutes = studentCardioLogs.reduce((acc, l) => acc + (l.durationMinutes || 0), 0);
 
-  // Calculate current BMI for student
-  const heightM = (student.heightCm || 170) / 100;
-  const currentBMI = heightM > 0 ? Math.round(((student.weightKg || 70) / (heightM * heightM)) * 10) / 10 : 0;
-  const currentBMICategory = getBMICategory(currentBMI);
+  // Registro de medidas mais recente do aluno (substitui a antiga vitrine de IMC)
+  const studentMeasurements = measurements
+    .filter((m) => m.studentId === student.id)
+    .sort((a, b) => (a.dateStr < b.dateStr ? 1 : -1));
+  const latestMeasurement = studentMeasurements[0];
 
   const startRestTimer = (seconds: number, name: string) => {
     setActiveTimerSeconds(seconds > 0 ? seconds : 60);
@@ -76,6 +89,42 @@ export const StudentView: React.FC<StudentViewProps> = ({
   const [customWeights, setCustomWeights] = useState<Record<string, string>>({});
   // Track if workout completed for the day
   const [dayCompleted, setDayCompleted] = useState<Record<string, boolean>>({});
+
+  // Data de hoje (YYYY-MM-DD) — é sob esta chave que o progresso é
+  // persistido no Firestore, para que o professor veja se o aluno treinou
+  // "naquele dia" (data real do calendário, não apenas o dia da semana).
+  const todayDateStr = new Date().toISOString().split('T')[0];
+  const todayProgressDoc = dayProgressList.find((p) => p.dateStr === todayDateStr);
+
+  // Ao carregar (ou quando o registro de hoje muda vindo do Firestore —
+  // por exemplo, aberto em outro dispositivo), hidrata o estado local do
+  // dia de hoje com o que já foi salvo, para não perder o progresso ao
+  // recarregar a página.
+  useEffect(() => {
+    if (!todayProgressDoc || todayProgressDoc.dayOfWeek !== todayDayKey) return;
+    setCompletedSets((prev) => ({ ...prev, ...todayProgressDoc.completedSets }));
+    setDayCompleted((prev) => ({ ...prev, [todayDayKey]: !!todayProgressDoc.completed }));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [todayProgressDoc?.dateStr, todayProgressDoc?.completed]);
+
+  // Persiste o progresso de HOJE no Firestore (uma série marcada, ou o
+  // treino inteiro concluído), para o professor conseguir ver no painel
+  // dele se o aluno já treinou no dia. Só grava quando o dia selecionado
+  // é o dia de hoje — navegar por outros dias da semana continua sendo
+  // apenas uma prévia local, sem sobrescrever o registro real de hoje.
+  const persistTodayProgress = (nextCompletedSets: Record<string, boolean>, nextCompleted: boolean) => {
+    if (!onSaveDayProgress || selectedDay !== todayDayKey) return;
+    onSaveDayProgress({
+      studentId: student.id,
+      studentName: student.name,
+      dateStr: todayDateStr,
+      dayOfWeek: todayDayKey,
+      completed: nextCompleted,
+      completedAt: nextCompleted ? new Date().toISOString() : undefined,
+      completedSets: nextCompletedSets,
+      exerciseWeights: customWeights,
+    });
+  };
   // Selected exercise for right demonstration panel
   const [featuredExerciseId, setFeaturedExerciseId] = useState<string | null>(null);
   // Mobile active sub-tab for optimal viewing on phone screens
@@ -101,11 +150,10 @@ export const StudentView: React.FC<StudentViewProps> = ({
   const toggleSet = (exerciseId: string, setIndex: number, defaultRestSeconds: number, exerciseName: string) => {
     const key = `${selectedDay}_${exerciseId}_${setIndex}`;
     const willBeCompleted = !completedSets[key];
+    const nextCompletedSets = { ...completedSets, [key]: willBeCompleted };
 
-    setCompletedSets((prev) => ({
-      ...prev,
-      [key]: willBeCompleted,
-    }));
+    setCompletedSets(nextCompletedSets);
+    persistTodayProgress(nextCompletedSets, !!dayCompleted[todayDayKey]);
 
     // If student just checked the set, offer to start the rest timer
     if (willBeCompleted) {
@@ -134,6 +182,7 @@ export const StudentView: React.FC<StudentViewProps> = ({
 
   const handleFinishWorkout = () => {
     setDayCompleted((prev) => ({ ...prev, [selectedDay]: true }));
+    persistTodayProgress(completedSets, true);
     try {
       confetti({
         particleCount: 120,
@@ -149,14 +198,17 @@ export const StudentView: React.FC<StudentViewProps> = ({
   const handleResetDayProgress = () => {
     if (window.confirm('Deseja reiniciar as séries marcadas deste dia?')) {
       const prefix = `${selectedDay}_`;
+      let nextCompletedSets: Record<string, boolean> = {};
       setCompletedSets((prev) => {
         const next = { ...prev };
         Object.keys(next).forEach((key) => {
           if (key.startsWith(prefix)) delete next[key];
         });
+        nextCompletedSets = next;
         return next;
       });
       setDayCompleted((prev) => ({ ...prev, [selectedDay]: false }));
+      persistTodayProgress(nextCompletedSets, false);
     }
   };
 
@@ -214,22 +266,30 @@ export const StudentView: React.FC<StudentViewProps> = ({
                 <span className="text-slate-700 font-medium shrink-0">Objetivo:</span> <span className="truncate">{student.goal}</span>
               </p>
               <div className="flex flex-wrap items-center gap-2 sm:gap-3 text-[11px] sm:text-xs text-slate-500 mt-1.5">
-                <span>Peso: <strong className="text-slate-800">{student.weightKg} kg</strong></span>
+                <span>Peso: <strong className="text-slate-800">{latestMeasurement?.weightKg ?? student.weightKg} kg</strong></span>
                 <span>•</span>
                 <span>Altura: <strong className="text-slate-800">{student.heightCm} cm</strong></span>
                 <span>•</span>
                 <button
-                  id="student-view-open-bmi-btn"
+                  id="student-view-open-measurements-btn"
                   type="button"
-                  onClick={() => setShowBMIModal(true)}
+                  onClick={() => setShowMeasurementsModal(true)}
                   className="inline-flex items-center gap-1.5 px-2 py-0.5 rounded-lg bg-indigo-50 hover:bg-indigo-100 border border-indigo-200/80 text-indigo-700 font-bold transition cursor-pointer group shadow-2xs"
-                  title="Abrir Calculadora e Classificação de IMC"
+                  title="Registrar e ver evolução das medidas corporais"
                 >
                   <Scale className="w-3.5 h-3.5 text-indigo-600 group-hover:scale-110 transition-transform" />
-                  <span>IMC: {currentBMI}</span>
-                  <span className={`text-[10px] font-semibold px-1.5 py-0.2 rounded-full ${currentBMICategory.bgColor} ${currentBMICategory.textColor} border ${currentBMICategory.borderColor}`}>
-                    {currentBMICategory.label}
-                  </span>
+                  {latestMeasurement ? (
+                    <>
+                      <span>Gordura: {latestMeasurement.bodyFatPercent ?? '—'}%</span>
+                      {latestMeasurement.leanMassKg !== undefined && (
+                        <span className="text-[10px] font-semibold px-1.5 py-0.2 rounded-full bg-indigo-100 text-indigo-800 border border-indigo-200">
+                          M. Magra {latestMeasurement.leanMassKg}kg
+                        </span>
+                      )}
+                    </>
+                  ) : (
+                    <span>Registrar Medidas</span>
+                  )}
                 </button>
                 <span>•</span>
                 <button
@@ -244,6 +304,17 @@ export const StudentView: React.FC<StudentViewProps> = ({
                   <span className="text-[10px] font-semibold px-1.5 py-0.2 rounded-full bg-orange-100 text-orange-800 border border-orange-200">
                     {studentCardioLogs.length} reg
                   </span>
+                </button>
+                <span>•</span>
+                <button
+                  id="student-view-open-history-btn"
+                  type="button"
+                  onClick={() => setShowHistoryModal(true)}
+                  className="inline-flex items-center gap-1.5 px-2 py-0.5 rounded-lg bg-slate-100 hover:bg-slate-200 border border-slate-200/80 text-slate-700 font-bold transition cursor-pointer group shadow-2xs"
+                  title="Ver histórico de treinos e cardio por data"
+                >
+                  <Calendar className="w-3.5 h-3.5 text-slate-600 group-hover:scale-110 transition-transform" />
+                  <span>Histórico</span>
                 </button>
                 {instructor && (
                   <>
@@ -1014,21 +1085,25 @@ export const StudentView: React.FC<StudentViewProps> = ({
         />
       )}
 
-      {/* IMC Calculator Modal */}
-      {showBMIModal && (
-        <BMICalculatorModal
-          initialWeight={student.weightKg || 70}
-          initialHeight={student.heightCm || 170}
-          studentName={student.name}
-          onClose={() => setShowBMIModal(false)}
-          onSaveToStudent={(weightKg, heightCm) => {
-            if (onUpdateStudent) {
-              onUpdateStudent({
-                ...student,
-                weightKg,
-                heightCm,
-              });
+      {/* Registro de Medidas Corporais */}
+      {showMeasurementsModal && (
+        <MeasurementsModal
+          student={student}
+          measurements={measurements}
+          onClose={() => setShowMeasurementsModal(false)}
+          onSaveMeasurement={async (m) => {
+            if (onSaveMeasurement) {
+              await onSaveMeasurement(m);
             }
+            // Mantém o peso do perfil sincronizado com o último registro,
+            // já que outras telas (ex: calculadora de cardio) usam
+            // `student.weightKg` como padrão.
+            if (onUpdateStudent && m.weightKg) {
+              onUpdateStudent({ ...student, weightKg: m.weightKg });
+            }
+          }}
+          onDeleteMeasurement={(id) => {
+            if (onDeleteMeasurement) onDeleteMeasurement(id);
           }}
         />
       )}
@@ -1039,9 +1114,12 @@ export const StudentView: React.FC<StudentViewProps> = ({
           student={student}
           cardioLogs={cardioLogs}
           onClose={() => setShowCardioModal(false)}
-          onSaveCardioLog={(newLog) => {
+          onSaveCardioLog={async (newLog) => {
             if (onSaveCardioLog) {
-              onSaveCardioLog(newLog);
+              // O `await`/`return` aqui é essencial: é o que permite ao
+              // modal aguardar a gravação real no Firestore antes de exibir
+              // "sucesso" ao usuário.
+              await onSaveCardioLog(newLog);
             }
           }}
           onDeleteCardioLog={(logId) => {
@@ -1049,6 +1127,18 @@ export const StudentView: React.FC<StudentViewProps> = ({
               onDeleteCardioLog(logId);
             }
           }}
+        />
+      )}
+
+      {/* Histórico de treinos, cardio e vídeos por data */}
+      {showHistoryModal && (
+        <HistoryModal
+          student={student}
+          plan={plan}
+          dayProgressList={dayProgressList}
+          cardioLogs={cardioLogs}
+          submissions={submissions}
+          onClose={() => setShowHistoryModal(false)}
         />
       )}
     </div>

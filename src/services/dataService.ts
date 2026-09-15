@@ -20,6 +20,8 @@ import {
   ExecutionSubmission,
   InstructorFeedback,
   CardioLog,
+  DayProgress,
+  BodyMeasurement,
 } from '../types';
 
 /* ------------------------------------------------------------------ */
@@ -66,7 +68,7 @@ export async function saveStudent(student: Student) {
 export async function deleteStudent(studentId: string) {
   // Apaga também os dados das subcoleções do aluno (fichas, submissões e
   // cardio) antes de remover o perfil, para não deixar dados órfãos.
-  const subcollections = ['plans', 'submissions', 'cardioLogs'];
+  const subcollections = ['plans', 'submissions', 'cardioLogs', 'dayProgress', 'measurements'];
   for (const sub of subcollections) {
     const snap = await getDocs(collection(db, 'students', studentId, sub));
     await Promise.all(snap.docs.map((d) => deleteDoc(d.ref)));
@@ -282,4 +284,82 @@ export async function addCardioLog(studentId: string, instructorId: string, log:
 
 export async function deleteCardioLog(studentId: string, logId: string) {
   await deleteDoc(doc(db, 'students', studentId, 'cardioLogs', logId));
+}
+
+/* ------------------------------------------------------------------ */
+/* Progresso diário do treino (conclusão de séries e do dia)          */
+/* ------------------------------------------------------------------ */
+
+export function subscribeDayProgressForStudent(
+  studentId: string,
+  cb: (list: DayProgress[]) => void
+): Unsubscribe {
+  return onSnapshot(collection(db, 'students', studentId, 'dayProgress'), (snap) => {
+    cb(snap.docs.map((d) => d.data() as DayProgress));
+  });
+}
+
+export function subscribeDayProgressForInstructor(
+  instructorId: string,
+  cb: (list: DayProgress[]) => void
+): Unsubscribe {
+  const q = query(collectionGroup(db, 'dayProgress'), where('instructorId', '==', instructorId));
+  return onSnapshot(q, (snap) => {
+    cb(snap.docs.map((d) => d.data() as DayProgress));
+  });
+}
+
+// Documento id = dateStr (YYYY-MM-DD), então cada dia tem no máximo um
+// registro por aluno — chamadas repetidas no mesmo dia apenas atualizam.
+export async function saveDayProgress(
+  studentId: string,
+  instructorId: string,
+  progress: DayProgress
+) {
+  await setDoc(
+    doc(db, 'students', studentId, 'dayProgress', progress.dateStr),
+    { ...progress, instructorId },
+    { merge: true }
+  );
+}
+
+/* ------------------------------------------------------------------ */
+/* Medidas corporais (peso, % gordura, massa magra/gorda, circunf.)   */
+/* ------------------------------------------------------------------ */
+
+export function subscribeMeasurementsForStudent(
+  studentId: string,
+  cb: (list: BodyMeasurement[]) => void
+): Unsubscribe {
+  return onSnapshot(collection(db, 'students', studentId, 'measurements'), (snap) => {
+    cb(snap.docs.map((d) => ({ ...(d.data() as BodyMeasurement), id: d.id })));
+  });
+}
+
+export function subscribeMeasurementsForInstructor(
+  instructorId: string,
+  cb: (list: BodyMeasurement[]) => void
+): Unsubscribe {
+  const q = query(collectionGroup(db, 'measurements'), where('instructorId', '==', instructorId));
+  return onSnapshot(q, (snap) => {
+    cb(snap.docs.map((d) => ({ ...(d.data() as BodyMeasurement), id: d.id })));
+  });
+}
+
+// Documento id = dateStr, então um novo registro no mesmo dia atualiza
+// o anterior em vez de duplicar.
+export async function saveMeasurement(
+  studentId: string,
+  instructorId: string,
+  measurement: BodyMeasurement
+) {
+  await setDoc(
+    doc(db, 'students', studentId, 'measurements', measurement.dateStr),
+    { ...measurement, id: measurement.dateStr, instructorId },
+    { merge: true }
+  );
+}
+
+export async function deleteMeasurement(studentId: string, measurementId: string) {
+  await deleteDoc(doc(db, 'students', studentId, 'measurements', measurementId));
 }

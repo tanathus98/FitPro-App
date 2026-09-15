@@ -2,6 +2,9 @@ import {
   createUserWithEmailAndPassword,
   signInWithEmailAndPassword,
   sendPasswordResetEmail,
+  sendEmailVerification,
+  reload,
+  updatePassword,
   signOut,
   onAuthStateChanged,
   User,
@@ -28,6 +31,31 @@ export async function resetPassword(email: string) {
   await sendPasswordResetEmail(auth, email.trim());
 }
 
+/** Envia (ou reenvia) o e-mail de confirmação de conta. */
+export async function sendVerificationEmail(user: User) {
+  await sendEmailVerification(user);
+}
+
+/**
+ * Recarrega os dados do usuário direto do Firebase (usado para checar se o
+ * link de confirmação já foi clicado). O SDK atualiza o próprio objeto
+ * `user` em memória, então o mesmo objeto é devolvido já com
+ * `emailVerified` em dia.
+ */
+export async function reloadAuthUser(user: User): Promise<User> {
+  await reload(user);
+  return user;
+}
+
+/**
+ * Troca a senha do próprio usuário logado (ex: fluxo de "defina sua própria
+ * senha" no primeiro acesso, quando a conta foi criada pelo professor com
+ * uma senha gerada automaticamente).
+ */
+export async function updateOwnPassword(user: User, newPassword: string) {
+  await updatePassword(user, newPassword);
+}
+
 /** Descobre se o usuário logado é 'instrutor' ou 'aluno' olhando em qual coleção existe. */
 export async function resolveUserRole(uid: string): Promise<UserRole | null> {
   const instructorSnap = await getDoc(doc(db, 'instructors', uid));
@@ -49,6 +77,7 @@ export async function registerInstructor(
   const uid = cred.user.uid;
   const instructorDoc: Instructor = { ...profile, id: uid, email: email.trim() };
   await setDoc(doc(db, 'instructors', uid), instructorDoc);
+  await sendEmailVerification(cred.user);
   return uid;
 }
 
@@ -62,6 +91,7 @@ export async function registerStudent(
   const uid = cred.user.uid;
   const studentDoc: Student = { ...profile, id: uid, email: email.trim() };
   await setDoc(doc(db, 'students', uid), studentDoc);
+  await sendEmailVerification(cred.user);
   return uid;
 }
 
@@ -77,6 +107,9 @@ export async function createStudentAuthAccount(
   const secondaryAuth = getSecondaryAuth();
   const cred = await createUserWithEmailAndPassword(secondaryAuth, email.trim(), password);
   const uid = cred.user.uid;
+  // Precisa ser enviado antes do signOut, enquanto ainda temos o `user`
+  // autenticado na instância secundária.
+  await sendEmailVerification(cred.user);
   await signOut(secondaryAuth);
   return uid;
 }
