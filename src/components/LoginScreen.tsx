@@ -48,6 +48,7 @@ export const LoginScreen: React.FC<LoginScreenProps> = ({ instructors }) => {
   const [studentPassword, setStudentPassword] = useState('');
   const [studentPhone, setStudentPhone] = useState('');
   const [studentInstructorId, setStudentInstructorId] = useState<string>(instructors[0]?.id || '');
+  const [studentWantsInstructor, setStudentWantsInstructor] = useState<boolean>(true);
   const [studentGoal, setStudentGoal] = useState('Hipertrofia & Ganho de Massa');
   const [studentLevel, setStudentLevel] = useState<'Iniciante' | 'Intermediário' | 'Avançado'>('Iniciante');
   const [studentWeight, setStudentWeight] = useState(72);
@@ -152,9 +153,9 @@ export const LoginScreen: React.FC<LoginScreenProps> = ({ instructors }) => {
       setLoginError('É necessário concordar com o armazenamento dos seus dados para continuar.');
       return;
     }
-    const targetInstructorId = studentInstructorId || instructors[0]?.id || '';
-    if (!targetInstructorId) {
-      setLoginError('Ainda não há nenhum professor cadastrado para você escolher. Peça para um professor se cadastrar primeiro.');
+    const targetInstructorId = studentWantsInstructor ? (studentInstructorId || instructors[0]?.id || '') : '';
+    if (studentWantsInstructor && !targetInstructorId) {
+      setLoginError('Ainda não há nenhum professor cadastrado para você escolher. Peça para um professor se cadastrar primeiro, ou escolha "quero treinar sozinho".');
       return;
     }
 
@@ -169,7 +170,9 @@ export const LoginScreen: React.FC<LoginScreenProps> = ({ instructors }) => {
         weightKg: Number(studentWeight) || 70,
         heightCm: Number(studentHeight) || 170,
         notes: studentNotes.trim(),
-        instructorId: targetInstructorId,
+        // Sem professor: o campo simplesmente não é enviado (Student.instructorId
+        // é opcional) — assim o aluno começa como autônomo.
+        ...(targetInstructorId ? { instructorId: targetInstructorId } : {}),
         joinedDate: new Date().toISOString().split('T')[0],
         monthlyFee: 160,
         dueDay: 10,
@@ -507,27 +510,67 @@ export const LoginScreen: React.FC<LoginScreenProps> = ({ instructors }) => {
                       />
                     </div>
 
-                    {/* Escolha do Professor Responsável */}
+                    {/* Professor ou treino autônomo */}
                     <div>
-                      <label className="block text-xs font-bold text-slate-700 mb-1">
-                        Escolha seu Professor Responsável *
+                      <label className="block text-xs font-bold text-slate-700 mb-1.5">
+                        Como você quer treinar? *
                       </label>
-                      <select
-                        id="register-student-instructor-select"
-                        value={studentInstructorId}
-                        onChange={(e) => setStudentInstructorId(e.target.value)}
-                        className="w-full px-3.5 py-2.5 bg-slate-50 border border-slate-200 rounded-xl text-xs sm:text-sm text-slate-900 font-semibold focus:outline-none focus:border-indigo-500 focus:bg-white transition"
-                      >
-                        {instructors.map((inst) => (
-                          <option key={inst.id} value={inst.id}>
-                            {inst.name} ({inst.specialty})
-                          </option>
-                        ))}
-                      </select>
-                      <span className="text-[11px] text-slate-500 block mt-1">
-                        Sua ficha e evolução serão avaliadas diretamente por este professor.
-                      </span>
+                      <div className="grid grid-cols-2 gap-2">
+                        <button
+                          type="button"
+                          id="register-student-wants-instructor-btn"
+                          onClick={() => setStudentWantsInstructor(true)}
+                          className={`px-3 py-2.5 rounded-xl border text-xs font-bold transition cursor-pointer ${
+                            studentWantsInstructor
+                              ? 'bg-indigo-50 border-indigo-300 text-indigo-700'
+                              : 'bg-slate-50 border-slate-200 text-slate-500 hover:bg-slate-100'
+                          }`}
+                        >
+                          Com um professor
+                        </button>
+                        <button
+                          type="button"
+                          id="register-student-independent-btn"
+                          onClick={() => setStudentWantsInstructor(false)}
+                          className={`px-3 py-2.5 rounded-xl border text-xs font-bold transition cursor-pointer ${
+                            !studentWantsInstructor
+                              ? 'bg-indigo-50 border-indigo-300 text-indigo-700'
+                              : 'bg-slate-50 border-slate-200 text-slate-500 hover:bg-slate-100'
+                          }`}
+                        >
+                          Sozinho (sem professor)
+                        </button>
+                      </div>
                     </div>
+
+                    {/* Escolha do Professor Responsável */}
+                    {studentWantsInstructor ? (
+                      <div>
+                        <label className="block text-xs font-bold text-slate-700 mb-1">
+                          Escolha seu Professor Responsável *
+                        </label>
+                        <select
+                          id="register-student-instructor-select"
+                          value={studentInstructorId}
+                          onChange={(e) => setStudentInstructorId(e.target.value)}
+                          className="w-full px-3.5 py-2.5 bg-slate-50 border border-slate-200 rounded-xl text-xs sm:text-sm text-slate-900 font-semibold focus:outline-none focus:border-indigo-500 focus:bg-white transition"
+                        >
+                          {instructors.map((inst) => (
+                            <option key={inst.id} value={inst.id}>
+                              {inst.name} ({inst.specialty})
+                            </option>
+                          ))}
+                        </select>
+                        <span className="text-[11px] text-slate-500 block mt-1">
+                          Sua ficha e evolução serão avaliadas diretamente por este professor.
+                        </span>
+                      </div>
+                    ) : (
+                      <p className="text-[11px] text-indigo-700 bg-indigo-50 border border-indigo-100 rounded-xl px-3 py-2.5">
+                        Você vai montar sua própria ficha de treino dentro do app (do zero ou usando um modelo
+                        pronto). Se quiser, dá pra pedir vínculo com um professor depois, direto pelo app.
+                      </p>
+                    )}
 
                     {/* Objetivo e Nível */}
                     <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">

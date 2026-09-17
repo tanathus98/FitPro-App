@@ -22,7 +22,27 @@ import {
   CardioLog,
   DayProgress,
   BodyMeasurement,
+  CustomExercise,
+  JoinRequest,
 } from '../types';
+
+/**
+ * Remove campos com valor `undefined` de um objeto antes de gravar no
+ * Firestore. O SDK do Firestore rejeita `setDoc`/`updateDoc` caso qualquer
+ * campo do payload seja explicitamente `undefined` (lança "Function setDoc()
+ * called with invalid data. Unsupported field value: undefined") — o que
+ * acontece com frequência quando um campo opcional do formulário (ex:
+ * cintura, observações, % de gordura) fica em branco. Aplicado aqui, de
+ * forma centralizada, em toda escrita desta camada, para não depender de
+ * cada tela lembrar de tratar isso individualmente.
+ */
+export function cleanForFirestore<T extends Record<string, any>>(data: T): T {
+  const cleaned: Record<string, any> = {};
+  Object.entries(data).forEach(([key, value]) => {
+    if (value !== undefined) cleaned[key] = value;
+  });
+  return cleaned as T;
+}
 
 /* ------------------------------------------------------------------ */
 /* Instrutores — diretório público (leitura liberada, escrita própria) */
@@ -35,7 +55,7 @@ export function subscribeInstructors(cb: (list: Instructor[]) => void): Unsubscr
 }
 
 export async function saveInstructor(instructor: Instructor) {
-  await setDoc(doc(db, 'instructors', instructor.id), instructor, { merge: true });
+  await setDoc(doc(db, 'instructors', instructor.id), cleanForFirestore(instructor), { merge: true });
 }
 
 /* ------------------------------------------------------------------ */
@@ -62,13 +82,19 @@ export function subscribeStudentById(
 }
 
 export async function saveStudent(student: Student) {
-  await setDoc(doc(db, 'students', student.id), student, { merge: true });
+  await setDoc(doc(db, 'students', student.id), cleanForFirestore(student), { merge: true });
+}
+
+// Vincula um aluno autônomo a um professor (aceite de solicitação de
+// vínculo) — atualização parcial, sem exigir o objeto Student inteiro.
+export async function linkStudentToInstructor(studentId: string, instructorId: string) {
+  await setDoc(doc(db, 'students', studentId), { instructorId }, { merge: true });
 }
 
 export async function deleteStudent(studentId: string) {
   // Apaga também os dados das subcoleções do aluno (fichas, submissões e
   // cardio) antes de remover o perfil, para não deixar dados órfãos.
-  const subcollections = ['plans', 'submissions', 'cardioLogs', 'dayProgress', 'measurements'];
+  const subcollections = ['plans', 'submissions', 'cardioLogs', 'dayProgress', 'measurements', 'customExercises'];
   for (const sub of subcollections) {
     const snap = await getDocs(collection(db, 'students', studentId, sub));
     await Promise.all(snap.docs.map((d) => deleteDoc(d.ref)));
@@ -121,7 +147,7 @@ export function subscribePlansForStudents(
 }
 
 export async function savePlan(studentId: string, plan: WorkoutPlan) {
-  await setDoc(doc(db, 'students', studentId, 'plans', plan.id), plan, { merge: true });
+  await setDoc(doc(db, 'students', studentId, 'plans', plan.id), cleanForFirestore(plan), { merge: true });
 }
 
 /* ------------------------------------------------------------------ */
@@ -235,10 +261,10 @@ export async function addSubmission(
   instructorId: string,
   submission: ExecutionSubmission
 ) {
-  await setDoc(doc(db, 'students', studentId, 'submissions', submission.id), {
-    ...submission,
-    instructorId,
-  });
+  await setDoc(
+    doc(db, 'students', studentId, 'submissions', submission.id),
+    cleanForFirestore({ ...submission, instructorId })
+  );
 }
 
 export async function updateSubmissionFeedback(
@@ -246,10 +272,10 @@ export async function updateSubmissionFeedback(
   submissionId: string,
   feedback: InstructorFeedback
 ) {
-  await updateDoc(doc(db, 'students', studentId, 'submissions', submissionId), {
+  await updateDoc(doc(db, 'students', studentId, 'submissions', submissionId), cleanForFirestore({
     status: 'reviewed',
     feedback,
-  });
+  }));
 }
 
 /* ------------------------------------------------------------------ */
@@ -276,10 +302,10 @@ export function subscribeCardioLogsForInstructor(
 }
 
 export async function addCardioLog(studentId: string, instructorId: string, log: CardioLog) {
-  await setDoc(doc(db, 'students', studentId, 'cardioLogs', log.id), {
-    ...log,
-    instructorId,
-  });
+  await setDoc(
+    doc(db, 'students', studentId, 'cardioLogs', log.id),
+    cleanForFirestore({ ...log, instructorId })
+  );
 }
 
 export async function deleteCardioLog(studentId: string, logId: string) {
@@ -318,7 +344,7 @@ export async function saveDayProgress(
 ) {
   await setDoc(
     doc(db, 'students', studentId, 'dayProgress', progress.dateStr),
-    { ...progress, instructorId },
+    cleanForFirestore({ ...progress, instructorId }),
     { merge: true }
   );
 }
@@ -355,11 +381,117 @@ export async function saveMeasurement(
 ) {
   await setDoc(
     doc(db, 'students', studentId, 'measurements', measurement.dateStr),
-    { ...measurement, id: measurement.dateStr, instructorId },
+    cleanForFirestore({ ...measurement, id: measurement.dateStr, instructorId }),
     { merge: true }
   );
 }
 
 export async function deleteMeasurement(studentId: string, measurementId: string) {
   await deleteDoc(doc(db, 'students', studentId, 'measurements', measurementId));
+}
+
+/* ------------------------------------------------------------------ */
+/* Biblioteca pessoal de exercícios do professor                      */
+/* ------------------------------------------------------------------ */
+
+export function subscribeCustomExercisesForInstructor(
+  instructorId: string,
+  cb: (list: CustomExercise[]) => void
+): Unsubscribe {
+  return onSnapshot(collection(db, 'instructors', instructorId, 'customExercises'), (snap) => {
+    cb(snap.docs.map((d) => ({ ...(d.data() as CustomExercise), id: d.id })));
+  });
+}
+
+// Documento id = id do exercício, então salvar de novo com o mesmo id
+// atualiza a entrada existente em vez de duplicar.
+export async function saveCustomExercise(instructorId: string, exercise: CustomExercise) {
+  await setDoc(
+    doc(db, 'instructors', instructorId, 'customExercises', exercise.id),
+    cleanForFirestore({ ...exercise, id: exercise.id, instructorId }),
+    { merge: true }
+  );
+}
+
+export async function deleteCustomExercise(instructorId: string, exerciseId: string) {
+  await deleteDoc(doc(db, 'instructors', instructorId, 'customExercises', exerciseId));
+}
+
+/* ------------------------------------------------------------------ */
+/* Biblioteca pessoal de exercícios do ALUNO autônomo (sem professor)  */
+/* ------------------------------------------------------------------ */
+
+export function subscribeCustomExercisesForStudent(
+  studentId: string,
+  cb: (list: CustomExercise[]) => void
+): Unsubscribe {
+  return onSnapshot(collection(db, 'students', studentId, 'customExercises'), (snap) => {
+    cb(snap.docs.map((d) => ({ ...(d.data() as CustomExercise), id: d.id })));
+  });
+}
+
+export async function saveCustomExerciseForStudent(studentId: string, exercise: CustomExercise) {
+  await setDoc(
+    doc(db, 'students', studentId, 'customExercises', exercise.id),
+    cleanForFirestore({ ...exercise, id: exercise.id }),
+    { merge: true }
+  );
+}
+
+export async function deleteCustomExerciseForStudent(studentId: string, exerciseId: string) {
+  await deleteDoc(doc(db, 'students', studentId, 'customExercises', exerciseId));
+}
+
+/* ------------------------------------------------------------------ */
+/* Solicitações de vínculo: aluno autônomo pedindo pra entrar como     */
+/* aluno de um professor                                              */
+/* ------------------------------------------------------------------ */
+
+export function subscribeJoinRequestsForInstructor(
+  instructorId: string,
+  cb: (list: JoinRequest[]) => void
+): Unsubscribe {
+  return onSnapshot(collection(db, 'instructors', instructorId, 'joinRequests'), (snap) => {
+    cb(snap.docs.map((d) => ({ ...(d.data() as JoinRequest), id: d.id })));
+  });
+}
+
+// Um aluno pode ter, no máximo, uma solicitação por professor. Isso usa
+// collectionGroup pois o aluno não sabe de antemão em qual subcoleção de
+// instrutor procurar — filtra por studentId, que já vem gravado no próprio
+// documento.
+export function subscribeJoinRequestsForStudent(
+  studentId: string,
+  cb: (list: JoinRequest[]) => void
+): Unsubscribe {
+  const q = query(collectionGroup(db, 'joinRequests'), where('studentId', '==', studentId));
+  return onSnapshot(q, (snap) => {
+    cb(snap.docs.map((d) => ({ ...(d.data() as JoinRequest), id: d.id })));
+  });
+}
+
+// Documento id = studentId, então só existe uma solicitação pendente por
+// aluno em cada professor (pedir de novo atualiza a mesma).
+export async function sendJoinRequest(request: JoinRequest) {
+  await setDoc(
+    doc(db, 'instructors', request.instructorId, 'joinRequests', request.studentId),
+    cleanForFirestore(request),
+    { merge: true }
+  );
+}
+
+export async function respondToJoinRequest(
+  instructorId: string,
+  studentId: string,
+  status: 'accepted' | 'rejected'
+) {
+  await setDoc(
+    doc(db, 'instructors', instructorId, 'joinRequests', studentId),
+    { status },
+    { merge: true }
+  );
+}
+
+export async function deleteJoinRequest(instructorId: string, studentId: string) {
+  await deleteDoc(doc(db, 'instructors', instructorId, 'joinRequests', studentId));
 }

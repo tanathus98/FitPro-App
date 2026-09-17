@@ -4,9 +4,9 @@ import {
   Check, Calendar, ArrowUp, ArrowDown, Video, Copy, 
   Sparkles, ExternalLink, ShieldCheck, ChevronRight, Eye,
   Search, X, AlertCircle, Play, Star, Clock, CheckCircle2, MessageSquare, Filter, ArrowLeft,
-  DollarSign, CreditCard, AlertTriangle, Wallet, Scale, Flame, Camera, RefreshCw
+  DollarSign, CreditCard, AlertTriangle, Wallet, Scale, Flame, Camera, RefreshCw, Bell
 } from 'lucide-react';
-import { DayOfWeek, Exercise, Instructor, Student, WorkoutPlan, ExecutionSubmission, InstructorFeedback, PaymentStatus, CardioLog, DayProgress, BodyMeasurement } from '../types';
+import { DayOfWeek, Exercise, Instructor, Student, WorkoutPlan, ExecutionSubmission, InstructorFeedback, PaymentStatus, CardioLog, DayProgress, BodyMeasurement, CustomExercise, JoinRequest } from '../types';
 import { validatePassword, generateRandomPassword } from '../utils/passwordValidation';
 import { DAYS_CONFIG } from '../data/initialData';
 import { AvatarUploadModal } from './AvatarUploadModal';
@@ -28,6 +28,7 @@ interface InstructorViewProps {
   cardioLogs?: CardioLog[];
   dayProgressList?: DayProgress[];
   measurements?: BodyMeasurement[];
+  customExercises?: CustomExercise[];
   onSavePlan: (plan: WorkoutPlan) => void;
   onCreateStudent: (student: Student, initialPlan: WorkoutPlan, password: string) => Promise<void>;
   onUpdateStudent: (student: Student) => void;
@@ -40,6 +41,11 @@ interface InstructorViewProps {
   onDeleteCardioLog?: (logId: string) => void;
   onSaveMeasurement?: (measurement: BodyMeasurement) => void | Promise<void>;
   onDeleteMeasurement?: (measurementId: string) => void;
+  onSaveCustomExercise?: (exercise: CustomExercise) => void | Promise<void>;
+  onDeleteCustomExercise?: (exerciseId: string) => void;
+  joinRequests?: JoinRequest[];
+  onAcceptJoinRequest?: (request: JoinRequest) => void | Promise<void>;
+  onRejectJoinRequest?: (request: JoinRequest) => void | Promise<void>;
 }
 
 export const InstructorView: React.FC<InstructorViewProps> = ({
@@ -51,6 +57,7 @@ export const InstructorView: React.FC<InstructorViewProps> = ({
   cardioLogs = [],
   dayProgressList = [],
   measurements = [],
+  customExercises = [],
   onSavePlan,
   onCreateStudent,
   onUpdateStudent,
@@ -63,11 +70,18 @@ export const InstructorView: React.FC<InstructorViewProps> = ({
   onDeleteCardioLog,
   onSaveMeasurement,
   onDeleteMeasurement,
+  onSaveCustomExercise,
+  onDeleteCustomExercise,
+  joinRequests = [],
+  onAcceptJoinRequest,
+  onRejectJoinRequest,
 }) => {
   const [activeTab, setActiveTab] = useState<'workouts' | 'evaluations'>('workouts');
   const [selectedStudentId, setSelectedStudentId] = useState<string>(students[0]?.id || '');
   const [selectedDay, setSelectedDay] = useState<DayOfWeek>('segunda');
   const [searchQuery, setSearchQuery] = useState('');
+  const [showJoinRequestsModal, setShowJoinRequestsModal] = useState(false);
+  const pendingJoinRequests = joinRequests.filter((r) => r.status === 'pending');
 
   // Data de hoje, para checar rapidamente (por studentId) se o aluno já
   // treinou hoje — mesma chave usada pelo StudentView ao persistir.
@@ -402,6 +416,21 @@ export const InstructorView: React.FC<InstructorViewProps> = ({
         </div>
 
         <div className="flex items-center gap-2 w-full md:w-auto">
+          {pendingJoinRequests.length > 0 && (
+            <button
+              id="open-join-requests-btn"
+              type="button"
+              onClick={() => setShowJoinRequestsModal(true)}
+              className="relative w-full md:w-auto px-4 py-2.5 rounded-xl bg-white border border-amber-300 hover:bg-amber-50 text-amber-700 text-xs font-bold transition shadow-2xs flex items-center justify-center gap-2 cursor-pointer"
+              title="Alunos autônomos pedindo vínculo com você"
+            >
+              <Bell className="w-4 h-4" />
+              <span>Solicitações de Vínculo</span>
+              <span className="absolute -top-1.5 -right-1.5 w-5 h-5 rounded-full bg-amber-500 text-white text-[10px] font-black flex items-center justify-center border-2 border-white">
+                {pendingJoinRequests.length}
+              </span>
+            </button>
+          )}
           <button
             id="add-student-btn"
             onClick={() => setShowAddStudentModal(true)}
@@ -1500,11 +1529,18 @@ export const InstructorView: React.FC<InstructorViewProps> = ({
         <ExerciseEditorModal
           initialExercise={editingExercise}
           instructorId={instructor.id}
+          customExercises={customExercises}
           onClose={() => {
             setShowAddExerciseModal(false);
             setEditingExercise(null);
           }}
           onSave={handleAddOrUpdateExercise}
+          onSaveToLibrary={async (exercise) => {
+            if (onSaveCustomExercise) await onSaveCustomExercise(exercise);
+          }}
+          onDeleteFromLibrary={(exerciseId) => {
+            if (onDeleteCustomExercise) onDeleteCustomExercise(exerciseId);
+          }}
         />
       )}
 
@@ -1569,6 +1605,22 @@ export const InstructorView: React.FC<InstructorViewProps> = ({
         />
       )}
 
+      {/* Modal: Solicitações de vínculo de alunos autônomos */}
+      {showJoinRequestsModal && (
+        <JoinRequestsModal
+          requests={pendingJoinRequests}
+          onClose={() => setShowJoinRequestsModal(false)}
+          onAccept={async (req) => {
+            if (onAcceptJoinRequest) await onAcceptJoinRequest(req);
+            showToast(`${req.studentName} agora é seu aluno!`);
+          }}
+          onReject={async (req) => {
+            if (onRejectJoinRequest) await onRejectJoinRequest(req);
+            showToast(`Pedido de ${req.studentName} recusado.`);
+          }}
+        />
+      )}
+
       {/* Modal: Registro de Medidas Corporais do aluno selecionado */}
       {showMeasurementsModal && selectedStudent && (
         <MeasurementsModal
@@ -1612,22 +1664,33 @@ export const InstructorView: React.FC<InstructorViewProps> = ({
 /* -------------------------------------------------------------
    MODAL: Add / Edit Exercise with Video Demonstrator Selector
 -------------------------------------------------------------- */
-interface ExerciseEditorModalProps {
+export interface ExerciseEditorModalProps {
   initialExercise: Exercise | null;
   instructorId: string;
+  customExercises?: CustomExercise[];
   onClose: () => void;
   onSave: (exercise: Exercise) => void;
+  onSaveToLibrary?: (exercise: CustomExercise) => void | Promise<void>;
+  onDeleteFromLibrary?: (exerciseId: string) => void;
 }
 
-const ExerciseEditorModal: React.FC<ExerciseEditorModalProps> = ({
+export const ExerciseEditorModal: React.FC<ExerciseEditorModalProps> = ({
   initialExercise,
   instructorId,
+  customExercises = [],
   onClose,
   onSave,
+  onSaveToLibrary,
+  onDeleteFromLibrary,
 }) => {
   const [tab, setTab] = useState<'library' | 'custom'>(initialExercise ? 'custom' : 'library');
   const [selectedMuscle, setSelectedMuscle] = useState<string>('Todos');
   const [libSearch, setLibSearch] = useState<string>('');
+  // Guarda o id da biblioteca pessoal quando o exercício em edição veio de
+  // lá (selecionado na aba "Biblioteca"), pra saber se um novo salvamento
+  // deve ATUALIZAR essa entrada em vez de criar uma duplicata.
+  const [pickedFromCustomLibraryId, setPickedFromCustomLibraryId] = useState<string | null>(null);
+  const [saveToLibrary, setSaveToLibrary] = useState<boolean>(!initialExercise);
 
   // Form fields
   const [name, setName] = useState(initialExercise?.name || '');
@@ -1646,14 +1709,21 @@ const ExerciseEditorModal: React.FC<ExerciseEditorModalProps> = ({
   // e `videoUrl` seja substituído pela URL pública e permanente.
   const pendingVideoFileRef = React.useRef<File | null>(null);
 
-  // Filter Library
-  const filteredLibrary = EXERCISE_LIBRARY.filter((item) => {
+  // Filter Library — combina os exercícios "padrão" do sistema com os que o
+  // professor já salvou na própria biblioteca pessoal.
+  const combinedLibrary = React.useMemo(() => {
+    const custom = customExercises.map((c) => ({ ...c, isCustom: true as const }));
+    const defaults = EXERCISE_LIBRARY.map((c) => ({ ...c, isCustom: false as const }));
+    return [...custom, ...defaults];
+  }, [customExercises]);
+
+  const filteredLibrary = combinedLibrary.filter((item) => {
     const matchesGroup = selectedMuscle === 'Todos' || item.muscleGroup.toLowerCase().includes(selectedMuscle.toLowerCase());
     const matchesSearch = item.name.toLowerCase().includes(libSearch.toLowerCase());
     return matchesGroup && matchesSearch;
   });
 
-  const handleSelectFromLibrary = (item: ExerciseLibraryItem) => {
+  const handleSelectFromLibrary = (item: ExerciseLibraryItem & { isCustom: boolean }) => {
     pendingVideoFileRef.current = null;
     setVideoUploadError(null);
     setName(item.name);
@@ -1665,7 +1735,18 @@ const ExerciseEditorModal: React.FC<ExerciseEditorModalProps> = ({
     setThumbnail(item.thumbnail);
     setInstructions(item.instructions);
     setTips(item.tips);
+    setPickedFromCustomLibraryId(item.isCustom ? item.id : null);
+    // Já está salvo (padrão ou pessoal) — não precisa duplicar na biblioteca
+    // de novo, a menos que o professor decida atualizar manualmente.
+    setSaveToLibrary(false);
     setTab('custom');
+  };
+
+  const handleDeleteLibraryItem = (e: React.MouseEvent, itemId: string) => {
+    e.stopPropagation();
+    if (onDeleteFromLibrary && window.confirm('Remover este exercício da sua biblioteca pessoal?')) {
+      onDeleteFromLibrary(itemId);
+    }
   };
 
   const handleFileUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -1722,6 +1803,24 @@ const ExerciseEditorModal: React.FC<ExerciseEditorModalProps> = ({
       instructions: instructions.trim(),
       tips: tips.trim(),
     };
+
+    if (saveToLibrary && onSaveToLibrary) {
+      const libraryId = pickedFromCustomLibraryId || `cex_${Math.random().toString(36).substring(2, 9)}`;
+      await onSaveToLibrary({
+        id: libraryId,
+        instructorId,
+        name: newExercise.name,
+        muscleGroup: newExercise.muscleGroup,
+        defaultSets: newExercise.sets,
+        defaultReps: newExercise.reps,
+        defaultRestSeconds: newExercise.restSeconds,
+        videoUrl: newExercise.videoUrl,
+        thumbnail: newExercise.thumbnail || '',
+        instructions: newExercise.instructions,
+        tips: newExercise.tips || '',
+        createdAt: new Date().toISOString(),
+      });
+    }
 
     onSave(newExercise);
   };
@@ -1818,8 +1917,23 @@ const ExerciseEditorModal: React.FC<ExerciseEditorModalProps> = ({
                     key={item.id}
                     id={`lib-item-${item.id}`}
                     onClick={() => handleSelectFromLibrary(item)}
-                    className="bg-slate-50 border border-slate-200 hover:border-indigo-300 p-3 rounded-2xl cursor-pointer transition flex items-start gap-3 group"
+                    className="relative bg-slate-50 border border-slate-200 hover:border-indigo-300 p-3 rounded-2xl cursor-pointer transition flex items-start gap-3 group"
                   >
+                    {item.isCustom && (
+                      <span className="absolute top-2 right-2 flex items-center gap-1">
+                        <span className="text-[9px] font-bold px-1.5 py-0.5 rounded-full bg-indigo-100 text-indigo-700 border border-indigo-200">
+                          Meu
+                        </span>
+                        <button
+                          type="button"
+                          onClick={(e) => handleDeleteLibraryItem(e, item.id)}
+                          title="Remover da minha biblioteca"
+                          className="p-1 rounded-full bg-white border border-slate-200 text-slate-400 hover:text-rose-600 hover:border-rose-200 transition cursor-pointer"
+                        >
+                          <Trash2 className="w-2.5 h-2.5" />
+                        </button>
+                      </span>
+                    )}
                     <div className="relative w-16 h-16 rounded-xl overflow-hidden bg-slate-900 shrink-0 border border-slate-300 flex items-center justify-center">
                       {item.thumbnail ? (
                         <img src={item.thumbnail} alt={item.name} className="w-full h-full object-cover" />
@@ -1832,7 +1946,7 @@ const ExerciseEditorModal: React.FC<ExerciseEditorModalProps> = ({
                     </div>
                     <div className="min-w-0 flex-1">
                       <span className="text-[10px] font-semibold text-indigo-600 block">{item.muscleGroup}</span>
-                      <h4 className="text-xs font-bold text-slate-900 group-hover:text-indigo-600 transition truncate">
+                      <h4 className="text-xs font-bold text-slate-900 group-hover:text-indigo-600 transition truncate pr-8">
                         {item.name}
                       </h4>
                       <p className="text-[11px] text-slate-500 mt-0.5">
@@ -1845,6 +1959,11 @@ const ExerciseEditorModal: React.FC<ExerciseEditorModalProps> = ({
                     </div>
                   </div>
                 ))}
+                {filteredLibrary.length === 0 && (
+                  <p className="col-span-1 sm:col-span-2 text-center text-xs text-slate-400 py-8">
+                    Nenhum exercício encontrado com esse filtro.
+                  </p>
+                )}
               </div>
             </div>
           ) : (
@@ -2028,24 +2147,41 @@ const ExerciseEditorModal: React.FC<ExerciseEditorModalProps> = ({
                 </div>
               </div>
 
-              <div className="pt-4 border-t border-slate-100 flex justify-end gap-2">
-                <button
-                  type="button"
-                  id="cancel-ex-btn"
-                  onClick={onClose}
-                  disabled={isUploadingVideo}
-                  className="px-4 py-2 rounded-xl bg-slate-100 hover:bg-slate-200 text-slate-700 text-xs font-semibold transition cursor-pointer disabled:opacity-50"
-                >
-                  Cancelar
-                </button>
-                <button
-                  type="submit"
-                  id="save-ex-btn"
-                  disabled={isUploadingVideo}
-                  className="px-5 py-2 rounded-xl bg-indigo-600 hover:bg-indigo-700 text-white text-xs font-semibold transition shadow-md shadow-indigo-200 cursor-pointer disabled:opacity-50"
-                >
-                  {isUploadingVideo ? 'Enviando vídeo...' : 'Salvar na Ficha'}
-                </button>
+              <div className="pt-4 border-t border-slate-100 space-y-3">
+                <label className="flex items-start gap-2.5 p-3 rounded-xl bg-indigo-50/60 border border-indigo-100 cursor-pointer">
+                  <input
+                    type="checkbox"
+                    id="save-to-my-library-checkbox"
+                    checked={saveToLibrary}
+                    onChange={(e) => setSaveToLibrary(e.target.checked)}
+                    className="mt-0.5 w-3.5 h-3.5 accent-indigo-600 cursor-pointer"
+                  />
+                  <span className="text-[11px] text-indigo-900 leading-relaxed">
+                    <strong>Salvar na minha biblioteca de exercícios.</strong> Assim ele fica disponível na aba
+                    "Biblioteca" para usar em qualquer ficha, sem precisar cadastrar tudo de novo
+                    {pickedFromCustomLibraryId && ' (isso vai atualizar o exercício já salvo, em vez de duplicar)'}.
+                  </span>
+                </label>
+
+                <div className="flex justify-end gap-2">
+                  <button
+                    type="button"
+                    id="cancel-ex-btn"
+                    onClick={onClose}
+                    disabled={isUploadingVideo}
+                    className="px-4 py-2 rounded-xl bg-slate-100 hover:bg-slate-200 text-slate-700 text-xs font-semibold transition cursor-pointer disabled:opacity-50"
+                  >
+                    Cancelar
+                  </button>
+                  <button
+                    type="submit"
+                    id="save-ex-btn"
+                    disabled={isUploadingVideo}
+                    className="px-5 py-2 rounded-xl bg-indigo-600 hover:bg-indigo-700 text-white text-xs font-semibold transition shadow-md shadow-indigo-200 cursor-pointer disabled:opacity-50"
+                  >
+                    {isUploadingVideo ? 'Enviando vídeo...' : 'Salvar na Ficha'}
+                  </button>
+                </div>
               </div>
             </form>
           )}
@@ -2625,6 +2761,107 @@ const EditStudentPaymentModal: React.FC<EditStudentPaymentModalProps> = ({
             </button>
           </div>
         </form>
+      </div>
+    </div>
+  );
+};
+
+/* -------------------------------------------------------------
+   MODAL: Join Requests (alunos autônomos pedindo vínculo)
+-------------------------------------------------------------- */
+interface JoinRequestsModalProps {
+  requests: JoinRequest[];
+  onClose: () => void;
+  onAccept: (request: JoinRequest) => Promise<void>;
+  onReject: (request: JoinRequest) => Promise<void>;
+}
+
+const JoinRequestsModal: React.FC<JoinRequestsModalProps> = ({ requests, onClose, onAccept, onReject }) => {
+  const [processingId, setProcessingId] = useState<string | null>(null);
+
+  const handleAccept = async (req: JoinRequest) => {
+    setProcessingId(req.studentId);
+    try {
+      await onAccept(req);
+    } finally {
+      setProcessingId(null);
+    }
+  };
+
+  const handleReject = async (req: JoinRequest) => {
+    if (!window.confirm(`Recusar o pedido de ${req.studentName}?`)) return;
+    setProcessingId(req.studentId);
+    try {
+      await onReject(req);
+    } finally {
+      setProcessingId(null);
+    }
+  };
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center p-3 sm:p-5 bg-black/60 backdrop-blur-xs animate-fadeIn">
+      <div
+        className="relative w-full max-w-lg bg-white border border-slate-200 rounded-3xl shadow-2xl overflow-hidden max-h-[90vh] flex flex-col"
+        onClick={(e) => e.stopPropagation()}
+      >
+        <div className="p-4 sm:p-5 border-b border-slate-100 flex items-center justify-between bg-slate-50/80">
+          <div className="flex items-center gap-3">
+            <div className="p-2.5 rounded-2xl bg-amber-100/90 text-amber-600 shadow-2xs">
+              <Bell className="w-5 h-5" />
+            </div>
+            <div>
+              <h3 className="text-base font-bold text-slate-900 leading-tight">Solicitações de Vínculo</h3>
+              <p className="text-xs text-slate-500 mt-0.5">
+                Alunos autônomos que pediram para treinar com você
+              </p>
+            </div>
+          </div>
+          <button
+            type="button"
+            onClick={onClose}
+            className="p-1.5 text-slate-400 hover:text-slate-700 rounded-xl hover:bg-slate-200/60 transition cursor-pointer"
+          >
+            <X className="w-5 h-5" />
+          </button>
+        </div>
+
+        <div className="flex-1 overflow-y-auto p-4 sm:p-5 space-y-2.5">
+          {requests.length === 0 ? (
+            <p className="text-center text-xs text-slate-400 py-8">Nenhuma solicitação pendente no momento.</p>
+          ) : (
+            requests.map((req) => (
+              <div
+                key={req.studentId}
+                className="bg-slate-50 border border-slate-200 rounded-2xl p-3.5 flex items-center justify-between gap-3"
+              >
+                <div className="min-w-0">
+                  <h4 className="text-xs font-bold text-slate-900 truncate">{req.studentName}</h4>
+                  {req.studentEmail && (
+                    <p className="text-[11px] text-slate-500 truncate">{req.studentEmail}</p>
+                  )}
+                </div>
+                <div className="flex items-center gap-1.5 shrink-0">
+                  <button
+                    type="button"
+                    onClick={() => handleReject(req)}
+                    disabled={processingId === req.studentId}
+                    className="px-3 py-1.5 rounded-xl bg-white border border-slate-200 hover:bg-rose-50 hover:border-rose-200 hover:text-rose-700 text-slate-600 text-[11px] font-bold transition cursor-pointer disabled:opacity-50"
+                  >
+                    Recusar
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => handleAccept(req)}
+                    disabled={processingId === req.studentId}
+                    className="px-3 py-1.5 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white text-[11px] font-bold transition cursor-pointer disabled:opacity-50"
+                  >
+                    {processingId === req.studentId ? 'Aguarde...' : 'Aceitar'}
+                  </button>
+                </div>
+              </div>
+            ))
+          )}
+        </div>
       </div>
     </div>
   );

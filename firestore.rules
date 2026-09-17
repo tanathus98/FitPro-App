@@ -5,12 +5,16 @@ rules_version = '2';
 //
 // Modelo de dados:
 //   instructors/{instructorId}                -> perfil do professor (id = seu UID de Auth)
-//   students/{studentId}                       -> perfil do aluno (id = seu UID de Auth)
+//   instructors/{instructorId}/customExercises/{id} -> biblioteca pessoal de exercícios do professor
+//   instructors/{instructorId}/joinRequests/{studentId} -> pedidos de vínculo de alunos autônomos
+//   students/{studentId}                       -> perfil do aluno (id = seu UID de Auth) — instructorId
+//                                                  pode estar ausente (aluno autônomo, sem professor)
 //   students/{studentId}/plans/{planId}        -> fichas de treino do aluno
 //   students/{studentId}/submissions/{subId}   -> vídeos/execuções enviadas pelo aluno
 //   students/{studentId}/cardioLogs/{logId}    -> registros de cardio do aluno
 //   students/{studentId}/dayProgress/{dateStr} -> progresso diário de treino do aluno
 //   students/{studentId}/measurements/{dateStr}-> medidas corporais do aluno
+//   students/{studentId}/customExercises/{id}  -> biblioteca pessoal de exercícios do aluno autônomo
 //
 // IMPORTANTE: para consultas do tipo "list" (ex: instrutor buscando todos os
 // seus alunos, ou todas as submissões via collectionGroup), o Firestore NÃO
@@ -49,6 +53,16 @@ service cloud.firestore {
       return isSignedIn() && resource.data.instructorId == request.auth.uid;
     }
 
+    // Permite que um professor vincule a si mesmo um aluno autônomo, mas
+    // SÓ quando esse aluno já pediu (existe um joinRequest pendente dele
+    // para esse professor). Evita que qualquer instrutor simplesmente
+    // "adote" o perfil de qualquer aluno alterando o instructorId à força.
+    function isAcceptingOwnJoinRequest(studentId) {
+      return isSignedIn() &&
+        request.resource.data.instructorId == request.auth.uid &&
+        get(/databases/$(database)/documents/instructors/$(request.auth.uid)/joinRequests/$(studentId)).data.status == 'pending';
+    }
+
     // Diretório de instrutores: leitura pública (necessária para o aluno
     // escolher seu professor na tela de cadastro, antes mesmo de logar).
     // Só o próprio instrutor pode criar/editar seu documento.
@@ -56,23 +70,44 @@ service cloud.firestore {
       allow read: if true;
       allow create: if isInstructor(instructorId);
       allow update, delete: if isInstructor(instructorId);
+
+      // Biblioteca pessoal de exercícios do professor — só ele mesmo
+      // acessa (não precisa ser pública como o perfil do instrutor).
+      match /customExercises/{exerciseId} {
+        allow read, write: if isInstructor(instructorId);
+      }
+
+      // Pedido de um aluno autônomo para se vincular a este professor.
+      // Doc id = studentId, então só existe 1 pedido pendente por par
+      // aluno/professor. O aluno cria e pode cancelar (delete) o próprio
+      // pedido; só o professor responde (aceita/recusa) e limpa depois.
+      match /joinRequests/{studentId} {
+        allow read: if isInstructor(instructorId) || isStudentOwner(studentId);
+        allow create: if isStudentOwner(studentId) &&
+          request.resource.data.studentId == studentId &&
+          request.resource.data.instructorId == instructorId;
+        allow update: if isInstructor(instructorId);
+        allow delete: if isInstructor(instructorId) || isStudentOwner(studentId);
+      }
     }
 
     match /students/{studentId} {
       allow read: if isStudentOwner(studentId) || ownsResourceDirectly();
-      // Um aluno pode criar o próprio perfil (autocadastro), OU um instrutor
-      // pode criar o perfil de um aluno em seu nome, desde que o documento já
-      // nasça vinculado a ele (instructorId == seu próprio UID).
+      // Um aluno pode criar o próprio perfil (autocadastro, com ou sem
+      // professor), OU um instrutor pode criar o perfil de um aluno em seu
+      // nome, desde que o documento já nasça vinculado a ele.
       allow create: if isStudentOwner(studentId) ||
         (isSignedIn() && request.resource.data.instructorId == request.auth.uid);
-      allow update: if isStudentOwner(studentId) || ownsResourceDirectly();
-      allow delete: if ownsResourceDirectly();
+      allow update: if isStudentOwner(studentId) || ownsResourceDirectly() || isAcceptingOwnJoinRequest(studentId);
+      allow delete: if isStudentOwner(studentId) || ownsResourceDirectly();
 
       match /plans/{planId} {
         // Aqui studentId já é conhecido a partir do caminho da consulta
         // (não é um collectionGroup), então get() no pai funciona normalmente.
+        // O próprio aluno também pode escrever sua ficha — usado pelo
+        // aluno autônomo, que monta o próprio treino sem professor.
         allow read: if isStudentOwner(studentId) || isOwningInstructorViaParent(studentId);
-        allow write: if isOwningInstructorViaParent(studentId);
+        allow write: if isStudentOwner(studentId) || isOwningInstructorViaParent(studentId);
       }
 
       match /submissions/{submissionId} {
@@ -101,6 +136,12 @@ service cloud.firestore {
         allow read: if isStudentOwner(studentId) || ownsResourceDirectly();
         allow create, update: if isStudentOwner(studentId) || isOwningInstructorViaParent(studentId);
         allow delete: if isStudentOwner(studentId) || isOwningInstructorViaParent(studentId);
+      }
+
+      // Biblioteca pessoal de exercícios do aluno autônomo (sem professor)
+      // — inteiramente privada, só o próprio aluno acessa.
+      match /customExercises/{exerciseId} {
+        allow read, write: if isStudentOwner(studentId);
       }
     }
   }

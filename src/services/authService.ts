@@ -12,6 +12,7 @@ import {
 import { doc, setDoc, getDoc } from 'firebase/firestore';
 import { auth, db, getSecondaryAuth } from '../lib/firebase';
 import { Instructor, Student, UserRole } from '../types';
+import { cleanForFirestore } from './dataService';
 
 export function watchAuthState(callback: (user: User | null) => void) {
   return onAuthStateChanged(auth, callback);
@@ -76,7 +77,7 @@ export async function registerInstructor(
   const cred = await createUserWithEmailAndPassword(auth, email.trim(), password);
   const uid = cred.user.uid;
   const instructorDoc: Instructor = { ...profile, id: uid, email: email.trim() };
-  await setDoc(doc(db, 'instructors', uid), instructorDoc);
+  await setDoc(doc(db, 'instructors', uid), cleanForFirestore(instructorDoc));
   await sendEmailVerification(cred.user);
   return uid;
 }
@@ -90,7 +91,7 @@ export async function registerStudent(
   const cred = await createUserWithEmailAndPassword(auth, email.trim(), password);
   const uid = cred.user.uid;
   const studentDoc: Student = { ...profile, id: uid, email: email.trim() };
-  await setDoc(doc(db, 'students', uid), studentDoc);
+  await setDoc(doc(db, 'students', uid), cleanForFirestore(studentDoc));
   await sendEmailVerification(cred.user);
   return uid;
 }

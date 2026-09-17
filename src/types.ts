@@ -30,6 +30,27 @@ export interface DayWorkout {
   exercises: Exercise[];
 }
 
+// Exercício salvo na biblioteca pessoal do professor (além dos "padrões" do
+// sistema em src/data/exerciseLibrary.ts) — pode ser reaproveitado em
+// qualquer ficha, sem precisar recadastrar do zero toda vez.
+export interface CustomExercise {
+  id: string;
+  // Dono do exercício: uid do professor OU do aluno autônomo (sem
+  // professor), dependendo de onde o documento está salvo
+  // (instructors/{id}/customExercises ou students/{id}/customExercises).
+  instructorId: string;
+  name: string;
+  muscleGroup: string;
+  defaultSets: number;
+  defaultReps: string;
+  defaultRestSeconds: number;
+  videoUrl: string;
+  thumbnail: string;
+  instructions: string;
+  tips: string;
+  createdAt: string;
+}
+
 export interface WorkoutPlan {
   id: string;
   studentId: string;
@@ -42,6 +63,29 @@ export interface WorkoutPlan {
 
 export type PaymentStatus = 'em_dia' | 'atrasado' | 'pendente';
 
+// Modelo de treino pronto que um aluno autônomo (sem professor) pode usar
+// como ponto de partida ao montar a própria ficha.
+export interface WorkoutTemplate {
+  id: string;
+  title: string;
+  description: string;
+  level: 'Iniciante' | 'Intermediário' | 'Avançado';
+  schedule: Record<DayOfWeek, DayWorkout>;
+}
+
+// Solicitação de um aluno autônomo para se vincular a um professor.
+// Documento salvo em instructors/{instructorId}/joinRequests/{studentId}.
+export interface JoinRequest {
+  id: string; // = studentId
+  studentId: string;
+  studentName: string;
+  studentEmail?: string;
+  instructorId: string;
+  instructorName?: string;
+  status: 'pending' | 'accepted' | 'rejected';
+  requestedAt: string;
+}
+
 export interface Student {
   id: string;
   name: string;
@@ -53,7 +97,8 @@ export interface Student {
   weightKg: number;
   heightCm: number;
   notes?: string;
-  instructorId: string;
+  // Ausente/vazio = aluno autônomo, sem professor vinculado.
+  instructorId?: string;
   joinedDate: string;
   currentPlanId?: string;
   paymentStatus?: PaymentStatus;

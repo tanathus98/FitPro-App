@@ -21,6 +21,7 @@ interface RecordExecutionModalProps {
   exercise: Exercise;
   student: Student;
   dayOfWeek: DayOfWeek;
+  hasInstructor?: boolean;
   onClose: () => void;
   onSubmit: (submission: ExecutionSubmission) => void;
 }
@@ -29,6 +30,7 @@ export const RecordExecutionModal: React.FC<RecordExecutionModalProps> = ({
   exercise,
   student,
   dayOfWeek,
+  hasInstructor = true,
   onClose,
   onSubmit,
 }) => {
@@ -316,7 +318,7 @@ export const RecordExecutionModal: React.FC<RecordExecutionModalProps> = ({
                 <span className="px-2 py-0.5 rounded-full text-xs font-semibold bg-indigo-50 text-indigo-600 border border-indigo-100">
                   {exercise.muscleGroup}
                 </span>
-                <span className="text-xs text-slate-500">Enviar para Avaliação</span>
+                <span className="text-xs text-slate-500">{hasInstructor ? 'Enviar para Avaliação' : 'Salvar no Diário'}</span>
               </div>
               <h2 className="text-lg font-bold text-slate-900 mt-0.5">{exercise.name}</h2>
             </div>
@@ -527,7 +529,7 @@ export const RecordExecutionModal: React.FC<RecordExecutionModalProps> = ({
               <div className="flex items-center justify-between bg-emerald-50 p-3 rounded-2xl border border-emerald-200 text-emerald-900 text-xs">
                 <div className="flex items-center gap-2 font-medium">
                   <Check className="w-4 h-4 text-emerald-600" />
-                  <span>Vídeo pronto para avaliação do professor!</span>
+                  <span>{hasInstructor ? 'Vídeo pronto para avaliação do professor!' : 'Vídeo pronto para salvar no seu diário!'}</span>
                 </div>
                 <button
                   type="button"
@@ -584,7 +586,9 @@ export const RecordExecutionModal: React.FC<RecordExecutionModalProps> = ({
                 <div className="p-3.5 rounded-2xl bg-indigo-50 border border-indigo-100 flex items-start gap-2.5 text-indigo-900 text-xs">
                   <Sparkles className="w-4 h-4 text-indigo-600 shrink-0 mt-0.5" />
                   <p>
-                    O professor receberá este vídeo diretamente no painel de instrutor dele, onde avaliará sua postura, amplitude e cadência e enviará um feedback detalhado!
+                    {hasInstructor
+                      ? 'O professor receberá este vídeo diretamente no painel de instrutor dele, onde avaliará sua postura, amplitude e cadência e enviará um feedback detalhado!'
+                      : 'Este vídeo fica salvo no seu diário pessoal de treinos, pra você acompanhar sua própria evolução ao longo do tempo.'}
                   </p>
                 </div>
 
@@ -633,7 +637,7 @@ export const RecordExecutionModal: React.FC<RecordExecutionModalProps> = ({
                         ? uploadProgress !== null
                           ? `Enviando... ${Math.round(uploadProgress)}%`
                           : 'Enviando...'
-                        : 'Enviar para o Instrutor'}
+                        : hasInstructor ? 'Enviar para o Instrutor' : 'Salvar no Diário'}
                     </span>
                     <ArrowRight className="w-4 h-4" />
                   </button>

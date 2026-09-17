@@ -10,6 +10,8 @@ import {
   CardioLog,
   DayProgress,
   BodyMeasurement,
+  CustomExercise,
+  JoinRequest,
 } from './types';
 import { AppHeader } from './components/AppHeader';
 import { StudentView } from './components/StudentView';
@@ -34,7 +36,12 @@ import {
   subscribeDayProgressForInstructor,
   subscribeMeasurementsForStudent,
   subscribeMeasurementsForInstructor,
+  subscribeCustomExercisesForInstructor,
+  subscribeCustomExercisesForStudent,
+  subscribeJoinRequestsForInstructor,
+  subscribeJoinRequestsForStudent,
   saveStudent,
+  linkStudentToInstructor,
   saveInstructor,
   deleteStudent as deleteStudentDoc,
   savePlan,
@@ -45,6 +52,13 @@ import {
   saveDayProgress,
   saveMeasurement,
   deleteMeasurement as deleteMeasurementDoc,
+  saveCustomExercise,
+  deleteCustomExercise as deleteCustomExerciseDoc,
+  saveCustomExerciseForStudent,
+  deleteCustomExerciseForStudent as deleteCustomExerciseForStudentDoc,
+  sendJoinRequest,
+  respondToJoinRequest,
+  deleteJoinRequest,
 } from './services/dataService';
 
 export default function App() {
@@ -63,6 +77,9 @@ export default function App() {
   const [cardioLogs, setCardioLogs] = useState<CardioLog[]>([]);
   const [dayProgressList, setDayProgressList] = useState<DayProgress[]>([]);
   const [measurements, setMeasurements] = useState<BodyMeasurement[]>([]);
+  const [customExercises, setCustomExercises] = useState<CustomExercise[]>([]);
+  const [studentCustomExercises, setStudentCustomExercises] = useState<CustomExercise[]>([]);
+  const [joinRequests, setJoinRequests] = useState<JoinRequest[]>([]);
 
   const [instructorSubView, setInstructorSubView] = useState<'manage' | 'preview'>('manage');
   const [accessDeniedMessage, setAccessDeniedMessage] = useState<string | null>(null);
@@ -88,6 +105,9 @@ export default function App() {
         setCardioLogs([]);
         setDayProgressList([]);
         setMeasurements([]);
+        setCustomExercises([]);
+        setStudentCustomExercises([]);
+        setJoinRequests([]);
         setAuthChecked(true);
         return;
       }
@@ -118,12 +138,16 @@ export default function App() {
     const unsubCardio = subscribeCardioLogsForInstructor(uid, setCardioLogs);
     const unsubDayProgress = subscribeDayProgressForInstructor(uid, setDayProgressList);
     const unsubMeasurements = subscribeMeasurementsForInstructor(uid, setMeasurements);
+    const unsubCustomExercises = subscribeCustomExercisesForInstructor(uid, setCustomExercises);
+    const unsubJoinRequests = subscribeJoinRequestsForInstructor(uid, setJoinRequests);
     return () => {
       unsubStudents();
       unsubSubmissions();
       unsubCardio();
       unsubDayProgress();
       unsubMeasurements();
+      unsubCustomExercises();
+      unsubJoinRequests();
     };
   }, [role, authUser]);
 
@@ -153,6 +177,8 @@ export default function App() {
     const unsubCardio = subscribeCardioLogsForStudent(uid, setCardioLogs);
     const unsubDayProgress = subscribeDayProgressForStudent(uid, setDayProgressList);
     const unsubMeasurements = subscribeMeasurementsForStudent(uid, setMeasurements);
+    const unsubCustomExercises = subscribeCustomExercisesForStudent(uid, setStudentCustomExercises);
+    const unsubJoinRequests = subscribeJoinRequestsForStudent(uid, setJoinRequests);
     return () => {
       unsubStudent();
       unsubPlans();
@@ -160,6 +186,8 @@ export default function App() {
       unsubCardio();
       unsubDayProgress();
       unsubMeasurements();
+      unsubCustomExercises();
+      unsubJoinRequests();
     };
   }, [role, authUser]);
 
@@ -274,8 +302,9 @@ export default function App() {
 
   const activePlan = activeStudent?.currentPlanId ? plans[activeStudent.currentPlanId] : undefined;
 
-  const studentInstructor =
-    instructors.find((i) => i.id === activeStudent?.instructorId) || currentInstructor;
+  const studentInstructor = activeStudent?.instructorId
+    ? instructors.find((i) => i.id === activeStudent.instructorId)
+    : undefined;
 
   const resolveInstructorIdForStudent = (studentId: string): string => {
     const s = students.find((st) => st.id === studentId);
@@ -352,6 +381,55 @@ export default function App() {
     const m = measurements.find((x) => x.id === measurementId);
     if (!m) return;
     await deleteMeasurementDoc(m.studentId, measurementId);
+  };
+
+  const handleSaveCustomExercise = async (exercise: CustomExercise) => {
+    await saveCustomExercise(exercise.instructorId, exercise);
+  };
+
+  const handleDeleteCustomExercise = async (exerciseId: string) => {
+    if (!currentInstructor) return;
+    await deleteCustomExerciseDoc(currentInstructor.id, exerciseId);
+  };
+
+  // Biblioteca pessoal de exercícios do ALUNO autônomo (sem professor)
+  const handleSaveStudentCustomExercise = async (exercise: CustomExercise) => {
+    await saveCustomExerciseForStudent(exercise.instructorId, exercise);
+  };
+
+  const handleDeleteStudentCustomExercise = async (exerciseId: string) => {
+    if (!activeStudent) return;
+    await deleteCustomExerciseForStudentDoc(activeStudent.id, exerciseId);
+  };
+
+  // --- Vínculo aluno autônomo <-> professor ---
+  const handleSendJoinRequest = async (instructorId: string) => {
+    if (!activeStudent) return;
+    const targetInstructor = instructors.find((i) => i.id === instructorId);
+    await sendJoinRequest({
+      id: activeStudent.id,
+      studentId: activeStudent.id,
+      studentName: activeStudent.name,
+      studentEmail: activeStudent.email,
+      instructorId,
+      instructorName: targetInstructor?.name,
+      status: 'pending',
+      requestedAt: new Date().toISOString(),
+    });
+  };
+
+  const handleCancelJoinRequest = async (instructorId: string) => {
+    if (!activeStudent) return;
+    await deleteJoinRequest(instructorId, activeStudent.id);
+  };
+
+  const handleAcceptJoinRequest = async (request: JoinRequest) => {
+    await linkStudentToInstructor(request.studentId, request.instructorId);
+    await deleteJoinRequest(request.instructorId, request.studentId);
+  };
+
+  const handleRejectJoinRequest = async (request: JoinRequest) => {
+    await respondToJoinRequest(request.instructorId, request.studentId, 'rejected');
   };
 
   const handleDeleteCardioLog = async (logId: string) => {
@@ -479,6 +557,7 @@ export default function App() {
                 student={activeStudent}
                 plan={activePlan}
                 instructor={studentInstructor}
+                instructors={instructors}
                 submissions={submissions}
                 cardioLogs={cardioLogs}
                 dayProgressList={dayProgressList}
@@ -490,6 +569,13 @@ export default function App() {
                 measurements={measurements}
                 onSaveMeasurement={handleSaveMeasurement}
                 onDeleteMeasurement={handleDeleteMeasurement}
+                onSavePlan={handleSavePlan}
+                customExercises={studentCustomExercises}
+                onSaveCustomExercise={handleSaveStudentCustomExercise}
+                onDeleteCustomExercise={handleDeleteStudentCustomExercise}
+                joinRequests={joinRequests}
+                onSendJoinRequest={handleSendJoinRequest}
+                onCancelJoinRequest={handleCancelJoinRequest}
               />
             ) : (
               <div className="text-center py-20 text-slate-500">
@@ -518,6 +604,12 @@ export default function App() {
                 measurements={measurements}
                 onSaveMeasurement={handleSaveMeasurement}
                 onDeleteMeasurement={handleDeleteMeasurement}
+                customExercises={customExercises}
+                onSaveCustomExercise={handleSaveCustomExercise}
+                onDeleteCustomExercise={handleDeleteCustomExercise}
+                joinRequests={joinRequests}
+                onAcceptJoinRequest={handleAcceptJoinRequest}
+                onRejectJoinRequest={handleRejectJoinRequest}
               />
             ) : (
               <div>
@@ -538,6 +630,7 @@ export default function App() {
                     student={activeStudent}
                     plan={activePlan}
                     instructor={currentInstructor}
+                    instructors={instructors}
                     submissions={submissions}
                     cardioLogs={cardioLogs}
                     dayProgressList={dayProgressList}
@@ -549,6 +642,13 @@ export default function App() {
                     measurements={measurements}
                     onSaveMeasurement={handleSaveMeasurement}
                     onDeleteMeasurement={handleDeleteMeasurement}
+                    onSavePlan={handleSavePlan}
+                    customExercises={studentCustomExercises}
+                    onSaveCustomExercise={handleSaveStudentCustomExercise}
+                    onDeleteCustomExercise={handleDeleteStudentCustomExercise}
+                    joinRequests={joinRequests}
+                    onSendJoinRequest={handleSendJoinRequest}
+                    onCancelJoinRequest={handleCancelJoinRequest}
                   />
                 )}
               </div>

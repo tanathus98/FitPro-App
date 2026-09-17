@@ -6,7 +6,7 @@ import {
   RotateCcw, ShieldCheck, Video, Star, MessageSquare, AlertCircle, Camera, Scale,
   Bike, Footprints, TrendingUp, Activity
 } from 'lucide-react';
-import { DayOfWeek, Exercise, Student, WorkoutPlan, Instructor, ExecutionSubmission, CardioLog, DayProgress, BodyMeasurement } from '../types';
+import { DayOfWeek, Exercise, Student, WorkoutPlan, Instructor, ExecutionSubmission, CardioLog, DayProgress, BodyMeasurement, CustomExercise, JoinRequest } from '../types';
 import { DAYS_CONFIG, getTodayDayOfWeek } from '../data/initialData';
 import { MiniVideoPlayer } from './MiniVideoPlayer';
 import { ExerciseVideoModal } from './ExerciseVideoModal';
@@ -17,15 +17,20 @@ import { CardioTrackerModal } from './CardioTrackerModal';
 import { HistoryModal } from './HistoryModal';
 import { MeasurementsModal } from './MeasurementsModal';
 import { AvatarUploadModal } from './AvatarUploadModal';
+import { StudentPlanBuilder } from './StudentPlanBuilder';
+import { FindInstructorModal } from './FindInstructorModal';
 
 interface StudentViewProps {
   student: Student;
   plan?: WorkoutPlan;
   instructor?: Instructor;
+  instructors?: Instructor[];
   submissions?: ExecutionSubmission[];
   cardioLogs?: CardioLog[];
   dayProgressList?: DayProgress[];
   measurements?: BodyMeasurement[];
+  customExercises?: CustomExercise[];
+  joinRequests?: JoinRequest[];
   onSubmitExecution?: (submission: ExecutionSubmission) => void;
   onUpdateStudent?: (student: Student) => void;
   onSaveCardioLog?: (log: CardioLog) => void | Promise<void>;
@@ -33,16 +38,24 @@ interface StudentViewProps {
   onSaveDayProgress?: (progress: DayProgress) => void | Promise<void>;
   onSaveMeasurement?: (measurement: BodyMeasurement) => void | Promise<void>;
   onDeleteMeasurement?: (measurementId: string) => void;
+  onSavePlan?: (plan: WorkoutPlan) => void | Promise<void>;
+  onSaveCustomExercise?: (exercise: CustomExercise) => void | Promise<void>;
+  onDeleteCustomExercise?: (exerciseId: string) => void;
+  onSendJoinRequest?: (instructorId: string) => void | Promise<void>;
+  onCancelJoinRequest?: (instructorId: string) => void;
 }
 
 export const StudentView: React.FC<StudentViewProps> = ({
   student,
   plan,
   instructor,
+  instructors = [],
   submissions = [],
   cardioLogs = [],
   dayProgressList = [],
   measurements = [],
+  customExercises = [],
+  joinRequests = [],
   onSubmitExecution,
   onUpdateStudent,
   onSaveCardioLog,
@@ -50,6 +63,11 @@ export const StudentView: React.FC<StudentViewProps> = ({
   onSaveDayProgress,
   onSaveMeasurement,
   onDeleteMeasurement,
+  onSavePlan,
+  onSaveCustomExercise,
+  onDeleteCustomExercise,
+  onSendJoinRequest,
+  onCancelJoinRequest,
 }) => {
   const [selectedDay, setSelectedDay] = useState<DayOfWeek>(getTodayDayOfWeek());
   const [activeExerciseForModal, setActiveExerciseForModal] = useState<Exercise | null>(null);
@@ -65,6 +83,13 @@ export const StudentView: React.FC<StudentViewProps> = ({
   const [showCardioModal, setShowCardioModal] = useState<boolean>(false);
   const [showHistoryModal, setShowHistoryModal] = useState<boolean>(false);
   const [showMeasurementsModal, setShowMeasurementsModal] = useState<boolean>(false);
+  const [showPlanBuilder, setShowPlanBuilder] = useState<boolean>(false);
+  const [showFindInstructorModal, setShowFindInstructorModal] = useState<boolean>(false);
+
+  // Aluno autônomo: sem professor vinculado
+  const isIndependent = !student.instructorId;
+  const myJoinRequests = joinRequests.filter((r) => r.studentId === student.id);
+  const pendingJoinRequest = myJoinRequests.find((r) => r.status === 'pending');
 
   // Student cardio analytics
   const studentCardioLogs = cardioLogs.filter((l) => l.studentId === student.id);
@@ -101,24 +126,26 @@ export const StudentView: React.FC<StudentViewProps> = ({
   // dia de hoje com o que já foi salvo, para não perder o progresso ao
   // recarregar a página.
   useEffect(() => {
-    if (!todayProgressDoc || todayProgressDoc.dayOfWeek !== todayDayKey) return;
+    if (!todayProgressDoc || todayProgressDoc.dayOfWeek !== selectedDay) return;
     setCompletedSets((prev) => ({ ...prev, ...todayProgressDoc.completedSets }));
-    setDayCompleted((prev) => ({ ...prev, [todayDayKey]: !!todayProgressDoc.completed }));
+    setDayCompleted((prev) => ({ ...prev, [selectedDay]: !!todayProgressDoc.completed }));
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [todayProgressDoc?.dateStr, todayProgressDoc?.completed]);
+  }, [todayProgressDoc?.dateStr, todayProgressDoc?.completed, selectedDay]);
 
-  // Persiste o progresso de HOJE no Firestore (uma série marcada, ou o
-  // treino inteiro concluído), para o professor conseguir ver no painel
-  // dele se o aluno já treinou no dia. Só grava quando o dia selecionado
-  // é o dia de hoje — navegar por outros dias da semana continua sendo
-  // apenas uma prévia local, sem sobrescrever o registro real de hoje.
+  // Persiste no Firestore o progresso do dia sendo visualizado (uma série
+  // marcada, ou o treino inteiro concluído), para o professor ver no painel
+  // dele se o aluno já treinou. Sempre grava sob a data de HOJE (para o
+  // histórico/calendário ficar correto), mas registra qual dia da ficha
+  // (`selectedDay`) foi seguido — cobre também o caso de alguém seguir o
+  // treino de outro dia por causa da rotina (ex: fazer o "treino de
+  // segunda" numa quinta-feira).
   const persistTodayProgress = (nextCompletedSets: Record<string, boolean>, nextCompleted: boolean) => {
-    if (!onSaveDayProgress || selectedDay !== todayDayKey) return;
+    if (!onSaveDayProgress) return;
     onSaveDayProgress({
       studentId: student.id,
       studentName: student.name,
       dateStr: todayDateStr,
-      dayOfWeek: todayDayKey,
+      dayOfWeek: selectedDay,
       completed: nextCompleted,
       completedAt: nextCompleted ? new Date().toISOString() : undefined,
       completedSets: nextCompletedSets,
@@ -138,7 +165,11 @@ export const StudentView: React.FC<StudentViewProps> = ({
     if (onSubmitExecution) {
       onSubmitExecution(submission);
     }
-    setSubmissionSuccessToast(`Vídeo de "${submission.exerciseName}" enviado com sucesso para a avaliação do professor!`);
+    setSubmissionSuccessToast(
+      instructor
+        ? `Vídeo de "${submission.exerciseName}" enviado com sucesso para a avaliação do professor!`
+        : `Vídeo de "${submission.exerciseName}" salvo no seu diário de treinos!`
+    );
     setTimeout(() => setSubmissionSuccessToast(null), 5000);
   };
 
@@ -153,7 +184,7 @@ export const StudentView: React.FC<StudentViewProps> = ({
     const nextCompletedSets = { ...completedSets, [key]: willBeCompleted };
 
     setCompletedSets(nextCompletedSets);
-    persistTodayProgress(nextCompletedSets, !!dayCompleted[todayDayKey]);
+    persistTodayProgress(nextCompletedSets, !!dayCompleted[selectedDay]);
 
     // If student just checked the set, offer to start the rest timer
     if (willBeCompleted) {
@@ -316,6 +347,21 @@ export const StudentView: React.FC<StudentViewProps> = ({
                   <Calendar className="w-3.5 h-3.5 text-slate-600 group-hover:scale-110 transition-transform" />
                   <span>Histórico</span>
                 </button>
+                {isIndependent && (
+                  <>
+                    <span>•</span>
+                    <button
+                      id="student-view-open-plan-builder-btn"
+                      type="button"
+                      onClick={() => setShowPlanBuilder(true)}
+                      className="inline-flex items-center gap-1.5 px-2 py-0.5 rounded-lg bg-emerald-50 hover:bg-emerald-100 border border-emerald-200/80 text-emerald-700 font-bold transition cursor-pointer group shadow-2xs"
+                      title={plan ? 'Editar minha ficha de treino' : 'Montar minha ficha de treino'}
+                    >
+                      <Dumbbell className="w-3.5 h-3.5 text-emerald-600 group-hover:scale-110 transition-transform" />
+                      <span>{plan ? 'Editar Minha Ficha' : 'Montar Meu Treino'}</span>
+                    </button>
+                  </>
+                )}
                 {instructor && (
                   <>
                     <span className="hidden xs:inline">•</span>
@@ -323,6 +369,34 @@ export const StudentView: React.FC<StudentViewProps> = ({
                       <ShieldCheck className="w-3.5 h-3.5" />
                       {instructor.name}
                     </span>
+                  </>
+                )}
+                {isIndependent && (
+                  <>
+                    <span>•</span>
+                    {pendingJoinRequest ? (
+                      <button
+                        id="student-view-pending-join-request-btn"
+                        type="button"
+                        onClick={() => setShowFindInstructorModal(true)}
+                        className="inline-flex items-center gap-1.5 px-2 py-0.5 rounded-lg bg-amber-50 hover:bg-amber-100 border border-amber-200/80 text-amber-700 font-bold transition cursor-pointer shadow-2xs"
+                        title="Ver ou cancelar solicitação de vínculo"
+                      >
+                        <User className="w-3.5 h-3.5" />
+                        <span>Aguardando {pendingJoinRequest.instructorName || 'professor'}</span>
+                      </button>
+                    ) : (
+                      <button
+                        id="student-view-find-instructor-btn"
+                        type="button"
+                        onClick={() => setShowFindInstructorModal(true)}
+                        className="inline-flex items-center gap-1.5 px-2 py-0.5 rounded-lg bg-indigo-50 hover:bg-indigo-100 border border-indigo-200/80 text-indigo-700 font-bold transition cursor-pointer shadow-2xs"
+                        title="Buscar e solicitar vínculo com um professor"
+                      >
+                        <User className="w-3.5 h-3.5" />
+                        <span>Buscar Professor</span>
+                      </button>
+                    )}
                   </>
                 )}
               </div>
@@ -369,6 +443,37 @@ export const StudentView: React.FC<StudentViewProps> = ({
         </div>
 
         {/* Active Sheet Banner */}
+        {!plan && (
+          <div className="bg-white rounded-2xl border border-slate-200 p-6 sm:p-8 text-center space-y-3">
+            <div className="w-14 h-14 rounded-2xl bg-indigo-100 text-indigo-600 flex items-center justify-center mx-auto">
+              <Dumbbell className="w-7 h-7" />
+            </div>
+            {isIndependent ? (
+              <>
+                <h3 className="text-sm font-bold text-slate-900">Você ainda não tem uma ficha de treino</h3>
+                <p className="text-xs text-slate-500 max-w-sm mx-auto">
+                  Monte a sua agora — escolha um modelo pronto ou crie do zero, exercício por exercício.
+                </p>
+                <button
+                  id="student-view-empty-state-build-plan-btn"
+                  type="button"
+                  onClick={() => setShowPlanBuilder(true)}
+                  className="inline-flex items-center gap-2 px-5 py-2.5 rounded-xl bg-indigo-600 hover:bg-indigo-700 text-white text-xs font-bold transition shadow-md shadow-indigo-200 cursor-pointer"
+                >
+                  <Dumbbell className="w-4 h-4" /> Montar Meu Treino
+                </button>
+              </>
+            ) : (
+              <>
+                <h3 className="text-sm font-bold text-slate-900">Sua ficha ainda não foi montada</h3>
+                <p className="text-xs text-slate-500 max-w-sm mx-auto">
+                  {instructor ? `${instructor.name} ainda não configurou seus treinos.` : 'Seu professor ainda não configurou seus treinos.'} Assim que estiver pronta, ela aparece aqui automaticamente.
+                </p>
+              </>
+            )}
+          </div>
+        )}
+
         {plan && (
           <div className="mt-4 pt-3 border-t border-slate-100 flex flex-col sm:flex-row items-start sm:items-center justify-between gap-1.5 text-xs">
             <div className="flex items-center gap-2 text-slate-700 truncate">
@@ -910,10 +1015,15 @@ export const StudentView: React.FC<StudentViewProps> = ({
                           <Star className="w-3 h-3 fill-amber-400 text-amber-500" />
                           <span>{sub.feedback?.rating}★ Avaliado</span>
                         </div>
-                      ) : (
+                      ) : instructor ? (
                         <div className="flex items-center gap-1 bg-amber-50 border border-amber-200 text-amber-700 px-2 py-0.5 rounded-lg text-[11px] font-semibold">
                           <Clock className="w-3 h-3 text-amber-600" />
                           <span>Aguardando</span>
+                        </div>
+                      ) : (
+                        <div className="flex items-center gap-1 bg-slate-100 border border-slate-200 text-slate-600 px-2 py-0.5 rounded-lg text-[11px] font-semibold">
+                          <Video className="w-3 h-3 text-slate-500" />
+                          <span>No diário</span>
                         </div>
                       )}
                     </div>
@@ -1046,6 +1156,7 @@ export const StudentView: React.FC<StudentViewProps> = ({
           exercise={recordingExercise}
           student={student}
           dayOfWeek={selectedDay}
+          hasInstructor={!!instructor}
           onClose={() => setRecordingExercise(null)}
           onSubmit={handleRecordSubmit}
         />
@@ -1139,6 +1250,43 @@ export const StudentView: React.FC<StudentViewProps> = ({
           cardioLogs={cardioLogs}
           submissions={submissions}
           onClose={() => setShowHistoryModal(false)}
+        />
+      )}
+
+      {/* Montar/editar ficha de treino (aluno autônomo, sem professor) */}
+      {showPlanBuilder && (
+        <StudentPlanBuilder
+          student={student}
+          existingPlan={plan}
+          customExercises={customExercises}
+          onClose={() => setShowPlanBuilder(false)}
+          onSave={async (newPlan) => {
+            if (onSavePlan) await onSavePlan(newPlan);
+            if (onUpdateStudent && student.currentPlanId !== newPlan.id) {
+              onUpdateStudent({ ...student, currentPlanId: newPlan.id });
+            }
+          }}
+          onSaveToLibrary={async (exercise) => {
+            if (onSaveCustomExercise) await onSaveCustomExercise(exercise);
+          }}
+          onDeleteFromLibrary={(exerciseId) => {
+            if (onDeleteCustomExercise) onDeleteCustomExercise(exerciseId);
+          }}
+        />
+      )}
+
+      {/* Buscar/solicitar vínculo com um professor (aluno autônomo) */}
+      {showFindInstructorModal && (
+        <FindInstructorModal
+          instructors={instructors}
+          myRequests={myJoinRequests}
+          onClose={() => setShowFindInstructorModal(false)}
+          onSendRequest={async (instructorId) => {
+            if (onSendJoinRequest) await onSendJoinRequest(instructorId);
+          }}
+          onCancelRequest={(instructorId) => {
+            if (onCancelJoinRequest) onCancelJoinRequest(instructorId);
+          }}
         />
       )}
     </div>
