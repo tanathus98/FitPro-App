@@ -144,5 +144,35 @@ service cloud.firestore {
         allow read, write: if isStudentOwner(studentId);
       }
     }
+
+    // ------------------------------------------------------------------
+    // Consultas collectionGroup
+    //
+    // As regras aninhadas acima NÃO valem para collectionGroup(): esse tipo
+    // de consulta só é liberado por regras no formato /{path=**}/nome/{id}
+    // (exige rules_version = '2', já declarado no topo). Cada regra abaixo
+    // repete a mesma condição de leitura já usada nas subcoleções, apenas
+    // comparando campos gravados no próprio documento — por isso não abre
+    // acesso a nada além do que o dono já podia ler.
+    // ------------------------------------------------------------------
+
+    // Professor listando envios/cardio/progresso/medidas dos seus alunos.
+    match /{path=**}/submissions/{docId} {
+      allow read: if isSignedIn() && resource.data.instructorId == request.auth.uid;
+    }
+    match /{path=**}/cardioLogs/{docId} {
+      allow read: if isSignedIn() && resource.data.instructorId == request.auth.uid;
+    }
+    match /{path=**}/dayProgress/{docId} {
+      allow read: if isSignedIn() && resource.data.instructorId == request.auth.uid;
+    }
+    match /{path=**}/measurements/{docId} {
+      allow read: if isSignedIn() && resource.data.instructorId == request.auth.uid;
+    }
+
+    // Aluno buscando os próprios pedidos de vínculo (em qualquer professor).
+    match /{path=**}/joinRequests/{docId} {
+      allow read: if isSignedIn() && resource.data.studentId == request.auth.uid;
+    }
   }
 }

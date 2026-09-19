@@ -308,7 +308,11 @@ export default function App() {
 
   const resolveInstructorIdForStudent = (studentId: string): string => {
     const s = students.find((st) => st.id === studentId);
-    return s?.instructorId || currentInstructor?.id || '';
+    if (s?.instructorId) return s.instructorId;
+    // Aluno autônomo (sem professor): NÃO herdar o id de outro professor —
+    // `currentInstructor` cai em instructors[0] para alunos, e isso deixaria
+    // os registros dele legíveis por um professor qualquer.
+    return role === 'instrutor' ? currentInstructor?.id || '' : '';
   };
 
   const handleSavePlan = async (updatedPlan: WorkoutPlan) => {

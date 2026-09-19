@@ -5,7 +5,9 @@ import { Instructor, Student, UserRole } from '../types';
 interface AppHeaderProps {
   currentRole: UserRole;
   currentStudent?: Student;
-  instructor: Instructor;
+  // Ausente para aluno autônomo (sem professor vinculado) ou enquanto a
+  // lista de professores ainda está carregando.
+  instructor?: Instructor;
   allInstructors?: Instructor[];
   onSwitchInstructor?: (instructorId: string) => void;
   onLogout: () => void;
@@ -30,7 +32,7 @@ export const AppHeader: React.FC<AppHeaderProps> = ({
           <h1 className="text-base sm:text-xl font-bold text-slate-900 tracking-tight truncate max-w-[180px] xs:max-w-[220px] sm:max-w-none">
             {currentRole === 'aluno' && currentStudent
               ? `Olá, ${currentStudent.name}`
-              : `Painel do ${instructor.name}`}
+              : `Painel do ${instructor?.name ?? 'Professor'}`}
           </h1>
           <p className="text-[11px] sm:text-xs text-slate-500 flex items-center gap-1.5 flex-wrap truncate">
             {currentRole === 'aluno' ? (
@@ -40,7 +42,9 @@ export const AppHeader: React.FC<AppHeaderProps> = ({
                   <span className="truncate">Ficha Exclusiva</span>
                 </span>
                 <span className="hidden sm:inline">•</span>
-                <span className="text-indigo-600 font-semibold hidden xs:inline">Prof. {instructor.name.split(' ')[0]}</span>
+                <span className="text-indigo-600 font-semibold hidden xs:inline">
+                  {instructor?.name ? `Prof. ${instructor.name.split(' ')[0]}` : 'Treino autônomo'}
+                </span>
               </>
             ) : (
               <>
@@ -49,7 +53,7 @@ export const AppHeader: React.FC<AppHeaderProps> = ({
                   Área do Professor
                 </span>
                 <span className="hidden sm:inline">•</span>
-                <span className="text-slate-500 hidden xs:inline">CREF: {instructor.cref}</span>
+                <span className="text-slate-500 hidden xs:inline">CREF: {instructor?.cref}</span>
               </>
             )}
           </p>
@@ -70,7 +74,7 @@ export const AppHeader: React.FC<AppHeaderProps> = ({
                   <span className="text-[11px] font-bold text-slate-500">Trocar Prof:</span>
                   <select
                     id="header-instructor-switcher"
-                    value={instructor.id}
+                    value={instructor?.id ?? ''}
                     onChange={(e) => onSwitchInstructor(e.target.value)}
                     className="bg-transparent text-slate-900 font-bold text-xs focus:outline-none cursor-pointer"
                   >
